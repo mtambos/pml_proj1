@@ -5,8 +5,9 @@ from numpy.linalg import slogdet
 from scipy.stats import (norm as sp_norm, truncnorm as sp_truncnorm)
 from scipy.spatial.distance import cdist
 from scipy.special import polygamma
+import seaborn as sns
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.datasets import load_breast_cancer
+from sklearn.decomposition import PCA
 from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.preprocessing import Normalizer
 from sklearn.metrics import accuracy_score
@@ -55,7 +56,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  alpha_gamma: float=1, beta_gamma: float=1,
                  alpha_omega: float=1, beta_omega: float=1,
                  max_iter: int=200, margin: float=1,
-                 sigma_g: float=0.1, verbose: bool=False):
+                 sigma_g: float=0.1, null_threshold=1e-6,
+                 verbose: bool=False):
         """
         :param kernels: iterable of kernels used to build the kernel matrix.
                         A kernel is a function k(A, B, *args) that takes a
@@ -101,13 +103,15 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         alpha_gamma=alpha_gamma, beta_gamma=beta_gamma,
                         alpha_omega=alpha_omega, beta_omega=beta_omega,
                         max_iter=max_iter, margin=margin,
-                        sigma_g=sigma_g, verbose=verbose)
+                        sigma_g=sigma_g, null_threshold=null_threshold,
+                        verbose=verbose)
         self.X_train = None
         self.a_mu = None
         self.a_sigma = None
         self.b_e_mu = None
         self.b_e_sigma = None
         self.sigma_g = None
+        self.Km_norms = None
 
     def get_params(self, deep=True):
         return self.params
@@ -138,19 +142,35 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self.margin = params['margin']
         if 'sigma_g' in params:
             self.σ_g = params['sigma_g']
+        if 'null_threshold' in params:
+            self.null_threshold = params['null_threshold']
         if 'verbose' in params:
             self.verbose = params['verbose']
         self.params.update(params)
         return self
 
-    def _create_kernel_matrix(self, X1, X2):
+    def _create_kernel_matrix(self, X1, X2, Km_norms=None):
         N1, _ = X1.shape
         N2, _ = X2.shape
         P = len(self.kernels)
         Km = np.zeros((P, N1, N2))
+        calc_norm = False
+        if Km_norms is None:
+            Km_norms = [None] * P
+            # Km_norms = np.ones(P)
+            calc_norm = True
+
         for i, k in enumerate(self.kernels):
-            Km[i, :, :] = k(X1, X2)
-        return Km
+            kmi = k(X1, X2)
+            kmi_norm = Km_norms[i]
+            if calc_norm:
+                kmi_norm = PCA(whiten=True).fit(kmi)
+                Km_norms[i] = kmi_norm
+            #     kmi_norm = np.linalg.norm(kmi, ord='fro')
+            #     Km_norms[i] = kmi_norm
+            # Km[i, :, :] = kmi / kmi_norm
+            Km[i, :, :] = kmi_norm.transform(kmi)
+        return Km, Km_norms
 
     def _init_λ(self, N):
         λ_α = (self.λ_α + 0.5) * np.ones(N)
@@ -249,6 +269,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         )
         b_e_μ = ((np.atleast_2d(f_mu) @ np.r_['1,2', np.ones((N, 1)), G_mu]) @
                  b_e_Σ)
+        b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.null_threshold] = 0
         b_sqrd_μ, e_sqrd_μ, etimesb_μ =\
             _calc_b_e_stats(b_e_μ, b_e_Σ, P)
         return b_e_Σ, b_e_μ, b_sqrd_μ, e_sqrd_μ, etimesb_μ
@@ -392,7 +413,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         N, _ = X_train.shape
         assert len(y_train) == N
         P = len(self.kernels)
-        Km = self._create_kernel_matrix(X_train, X_train)
+        Km, Km_norms = self._create_kernel_matrix(X_train, X_train)
+        self.Km_norms = Km_norms
 
         lambda_alpha, lambda_beta = self._init_λ(N)
         a_mu, a_sigma = self._init_a(N)
@@ -457,12 +479,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
 
     def predict(self, X_test: np.ndarray) -> np.ndarray:
         y_pred = self.predict_proba(X_test)
-        y_pred[y_pred >= 0.5] = 1
-        y_pred[y_pred < 0.5] = -1
+        y_pred = np.argwhere(y_pred >= 0.5)[:, 1]
+        y_pred[y_pred == 0] = -1
         return y_pred.astype(int)
 
     def predict_proba(self, X_test: np.ndarray) -> np.ndarray:
-        Km = self._create_kernel_matrix(X_test, self.X_train)
+        Km, _ = self._create_kernel_matrix(X_test, self.X_train, Km_norms=self.Km_norms)
         margin = self.margin
         a_mu = self.a_mu
         a_sigma = self.a_sigma
@@ -485,7 +507,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         pos: np.ndarray = 1 - sp_norm.cdf((margin - f_mu) / f_sigma)
         neg: np.ndarray = sp_norm.cdf((-margin - f_mu) / f_sigma)
         y_pred_proba = pos / (pos + neg)
-        return y_pred_proba.flatten()
+        return np.r_['0,2', 1-y_pred_proba, y_pred_proba].T
+
+    def plot_e(self, **kwargs):
+        sns.distplot(self.b_e_mu[0, 1:], **kwargs)
 
 
 # noinspection PyPep8Naming
@@ -509,18 +534,26 @@ def scoring(estimator, X_test, y_test):
         bemkl_model = estimator
     if isinstance(estimator, Pipeline):
         bemkl_model = estimator.named_steps['bemkl']
-    b_e_mu = bemkl_model.b_e_mu
+    e_mu = bemkl_model.b_e_mu[0, 1:]
     X_train = bemkl_model.X_train
     if len(X_train) != len(X_test):
         # noinspection PyTypeChecker
-        nr_kernels_used = len(np.argwhere(~np.isclose(b_e_mu[0, 1:], 0)))
-        total_kernels = len(b_e_mu[0, 1:])
-        print(f"{scoring.iteration} - "
-              f"Non-0: {nr_kernels_used}. "
-              f"Total: {total_kernels}. "
-              f"Ratio: {nr_kernels_used/total_kernels}")
+        nr_kernels_used = len(np.argwhere(
+            np.abs(e_mu) > bemkl_model.null_threshold
+        ))
+        total_kernels = len(e_mu)
+        print(
+            f"{scoring.iteration} - "
+            f"Non-0: {nr_kernels_used}. "
+            f"Total: {total_kernels}. "
+            f"Ratio: {nr_kernels_used/total_kernels}. "
+            f"Mean e: {e_mu.mean():0.4f}. "
+            f"Median e: {np.median(e_mu):0.4f}. "
+            f"Std e: {e_mu.std():0.4f}. "
+         )
         scoring.iteration += 1
     return score
+
 
 if __name__ == '__main__':
     # noinspection PyPep8Naming
