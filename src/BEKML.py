@@ -96,13 +96,14 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         :param a_null_thrsh: members of the a_μ vector with an absolute value
                              lower than this will be considered zero.
                              Defaults to 1e-6.
-        :param k_norm_type: one of `none`, `pca`, `norm` or `kernel`, default
+        :param k_norm_type: one of `none`, `pca`, `frob` or `kernel`, default
                             `kernel`. Type of normalization to apply to the
                             kernel matrices:
                             * `none`: no normalization.
                             * `pca`: PCA whitening.
-                            * `norm`: divide each matrix by its Frobenius norm.
-                            *
+                            * `frob`: divide each matrix by its Frobenius norm.
+                            * `kernel`: set
+                               K~_{i, j} = K_{i, j}/ sqrt(K_{i, i}, K_{j, j}).
         :param verbose: whether to print progress messages.
 
         For gamma priors, you can experiment with three different (alpha, beta)
@@ -176,19 +177,26 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         calc_norm = False
         if Km_norms is None:
             Km_norms = [None] * P
-            # Km_norms = np.ones(P)
+            if self.k_norm_type == 'frob':
+                Km_norms = np.ones(P)
             calc_norm = True
 
         for i, k in enumerate(self.kernels):
             kmi = k(X1, X2)
             kmi_norm = Km_norms[i]
-            if calc_norm:
-                kmi_norm = PCA(whiten=True).fit(kmi)
-                Km_norms[i] = kmi_norm
-            #     kmi_norm = np.linalg.norm(kmi, ord='fro')
-            #     Km_norms[i] = kmi_norm
-            # Km[i, :, :] = kmi / kmi_norm
-            Km[i, :, :] = kmi_norm.transform(kmi)
+            if self.k_norm_type == 'pca':
+                if calc_norm:
+                    kmi_norm = PCA(whiten=True).fit(kmi)
+                    Km_norms[i] = kmi_norm
+                Km[i, :, :] = kmi_norm.transform(kmi)
+            elif self.k_norm_type == 'frob':
+                if calc_norm:
+                    kmi_norm = np.linalg.norm(kmi, ord='fro')
+                    Km_norms[i] = kmi_norm
+                Km[i, :, :] = kmi / kmi_norm
+            elif self.k_norm_type == 'kernel':
+                k_norm = np.sqrt(np.diag(kmi))
+                Km[i, :, :] = kmi / np.outer(k_norm, k_norm)
         return Km, Km_norms
 
     def _init_λ(self, N):
@@ -504,8 +512,14 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return y_pred.astype(int)
 
     def predict_proba(self, X_test: np.ndarray) -> np.ndarray:
-        Km, _ = self._create_kernel_matrix(X_test, self.X_train,
-                                           Km_norms=self.Km_norms)
+        if self.k_norm_type == 'kernel':
+            Ntr, _ = self.X_train.shape
+            X = np.r_[self.X_train, X_test]
+            Km, _ = self._create_kernel_matrix(X, X)
+            Km = Km[:, Ntr:, :Ntr]
+        else:
+            Km, _ = self._create_kernel_matrix(X_test, self.X_train,
+                                               Km_norms=self.Km_norms)
         margin = self.margin
         a_mu = self.a_mu
         a_sigma = self.a_sigma
@@ -550,13 +564,11 @@ def scoring(estimator, X_test, y_test):
         scoring.iteration = 0
     y_pred = estimator.predict(X_test)
     score = accuracy_score(y_test, y_pred)
-    bemkl_model = None
-    if isinstance(estimator, BEMKL):
-        bemkl_model = estimator
+    bemkl_model = estimator
     if isinstance(estimator, Pipeline):
         bemkl_model = estimator.named_steps['bemkl']
     e_mu = bemkl_model.b_e_mu[0, 1:]
-    a_mu = bemkl_model.a_mu
+    a_mu = bemkl_model.a_mu.flatten()
     X_train = bemkl_model.X_train
     if len(X_train) != len(X_test):
         # noinspection PyTypeChecker
