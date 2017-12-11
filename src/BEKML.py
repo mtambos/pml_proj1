@@ -580,16 +580,3 @@ def scoring(estimator, X_test, y_test):
          )
         scoring.iteration += 1
     return score
-
-
-if __name__ == '__main__':
-    # noinspection PyPep8Naming
-    kernel_list = [lambda A, B: gauss_kernel(A, B, 2 ** i)
-                   for i in range(-3, 7)]
-    # noinspection PyPep8Naming
-    kernel_list += [lambda A, B: poly_kernel(A, B, 0, i) for i in range(1, 4)]
-    model = BEMKL(kernels=kernel_list)
-    pipeline = make_pipeline(Normalizer(), model)
-    X, y = load_breast_cancer(True)
-    y[y == 0] = -1
-    cross_validate(pipeline, X, y, cv=3)
