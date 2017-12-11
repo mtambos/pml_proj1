@@ -57,6 +57,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  alpha_omega: float=1, beta_omega: float=1, max_iter: int=200,
                  margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
                  a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
+                 filter_kernels: bool=True, filter_sv: bool=True,
                  verbose: bool=False):
         """
         :param kernels: iterable of kernels used to build the kernel matrix.
@@ -104,6 +105,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                             * `frob`: divide each matrix by its Frobenius norm.
                             * `kernel`: set
                                K~_{i, j} = K_{i, j}/ sqrt(K_{i, i}, K_{j, j}).
+        :param filter_kernels: whether to eliminate kernels with corresponding
+                               null e_μ factor.
+        :param filter_sv: whether to eliminate training points with
+                          corresponding null a_μ factor.
         :param verbose: whether to print progress messages.
 
         For gamma priors, you can experiment with three different (alpha, beta)
@@ -120,6 +125,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         max_iter=max_iter, margin=margin,
                         sigma_g=sigma_g, e_null_thrsh=e_null_thrsh,
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
+                        filter_kernels=filter_kernels, filter_sv=filter_sv,
                         verbose=verbose)
         self.X_train = None
         self.a_mu = None
@@ -135,7 +141,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
     # noinspection PyAttributeOutsideInit
     def set_params(self, **params):
         if 'kernels' in params:
-            self.kernels = params['kernels']
+            self.kernels = np.asarray(params['kernels'])
         if 'random_state' in params:
             self.random_state = params['random_state']
             if not isinstance(self.random_state, np.random.RandomState):
@@ -164,6 +170,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self.a_null_thrsh = params['a_null_thrsh']
         if 'k_norm_type' in params:
             self.k_norm_type = params['k_norm_type']
+        if 'filter_kernels' in params:
+            self.filter_kernels = params['filter_kernels']
+        if 'filter_sv' in params:
+            self.filter_sv = params['filter_sv']
         if 'verbose' in params:
             self.verbose = params['verbose']
         self.params.update(params)
@@ -498,6 +508,36 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                 normalization
             )
 
+        self.total_kernels = P
+        self.total_sv = N
+
+        self.nr_sv_used = len(np.argwhere(
+            np.abs(a_mu[0]) > self.a_null_thrsh
+        ))
+        self.nr_kernels_used = len(np.argwhere(
+            np.abs(b_e_mu[0, 1:]) > self.e_null_thrsh
+        ))
+
+        self.e_mu_orig = e_mu = b_e_mu[0, 1:].copy()
+        self.kernels_orig = self.kernels.copy()
+
+        if self.filter_kernels:
+            e_mu = b_e_mu[0, 1:]
+            b_mu = b_e_mu[0, 0]
+            mask = np.abs(e_mu) > self.e_null_thrsh
+            e_mu = e_mu[mask]
+            self.kernels = self.kernels[mask]
+            b_e_mu = np.r_[b_mu, e_mu].reshape(1, len(e_mu)+1)
+            mask = np.r_[[True], mask]
+            b_e_sigma = b_e_sigma[mask][:, mask]
+
+        self.a_mu_orig = e_mu = a_mu[0].copy()
+        if self.filter_sv:
+            mask = np.abs(a_mu[0]) > self.a_null_thrsh
+            a_mu = a_mu[0, mask]
+            a_sigma = a_sigma[mask][:, mask]
+            self.X_train = self.X_train[mask]
+
         self.a_mu = a_mu
         self.a_sigma = a_sigma
         self.b_e_mu = b_e_mu
@@ -545,7 +585,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return np.r_['0,2', 1-y_pred_proba, y_pred_proba].T
 
     def plot_e(self, **kwargs):
-        sns.distplot(self.b_e_mu[0, 1:], **kwargs)
+        sns.distplot(self.e_mu_orig, **kwargs)
+
+    def plot_a(self, **kwargs):
+        sns.distplot(self.a_mu_orig, **kwargs)
 
 
 # noinspection PyPep8Naming
@@ -568,24 +611,15 @@ def scoring(estimator, X_test, y_test):
     if isinstance(estimator, Pipeline):
         bemkl_model = estimator.named_steps['bemkl']
     e_mu = bemkl_model.b_e_mu[0, 1:]
-    a_mu = bemkl_model.a_mu.flatten()
     X_train = bemkl_model.X_train
     if len(X_train) != len(X_test):
-        # noinspection PyTypeChecker
-        nr_kernels_used = len(np.argwhere(
-            np.abs(e_mu) > bemkl_model.e_null_thrsh
-        ))
-        total_kernels = len(e_mu)
-        nr_support_vect = len(np.argwhere(
-            np.abs(a_mu) > bemkl_model.a_null_thrsh
-        ))
-        total_support_vect = len(a_mu)
         print(
             f"{scoring.iteration} - "
-            f"Kernels: {nr_kernels_used}/{total_kernels} "
-            f"({nr_kernels_used/total_kernels}). "
-            f"SV: {nr_support_vect}/{total_support_vect} "
-            f"({nr_support_vect/total_support_vect}). "
+            f"Kernels: {bemkl_model.nr_kernels_used}/"
+            f"{bemkl_model.total_kernels} "
+            f"({bemkl_model.nr_kernels_used/bemkl_model.total_kernels}). "
+            f"SV: {bemkl_model.nr_sv_used}/{bemkl_model.total_sv} "
+            f"({bemkl_model.nr_sv_used/bemkl_model.total_sv}). "
             f"Mean e: {e_mu.mean():0.4f}. "
             f"Median e: {np.median(e_mu):0.4f}. "
             f"Std e: {e_mu.std():0.4f}. "
