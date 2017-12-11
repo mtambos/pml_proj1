@@ -54,9 +54,9 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  random_state: Union[None, int, np.random.RandomState]=None,
                  alpha_lambda: float=1, beta_lambda: float=1,
                  alpha_gamma: float=1, beta_gamma: float=1,
-                 alpha_omega: float=1, beta_omega: float=1,
-                 max_iter: int=200, margin: float=1,
-                 sigma_g: float=0.1, null_threshold=1e-6,
+                 alpha_omega: float=1, beta_omega: float=1, max_iter: int=200,
+                 margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
+                 a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
                  verbose: bool=False):
         """
         :param kernels: iterable of kernels used to build the kernel matrix.
@@ -90,6 +90,20 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         :param margin: controls scaling ambiguity, and places a low-density
                        region between two classes.
         :param sigma_g: standard deviation of intermediate representations.
+        :param e_null_thrsh: members of the e_μ vector with an absolute value
+                             lower than this will be considered zero.
+                             Defaults to 1e-6.
+        :param a_null_thrsh: members of the a_μ vector with an absolute value
+                             lower than this will be considered zero.
+                             Defaults to 1e-6.
+        :param k_norm_type: one of `none`, `pca`, `norm` or `kernel`, default
+                            `kernel`. Type of normalization to apply to the
+                            kernel matrices:
+                            * `none`: no normalization.
+                            * `pca`: PCA whitening.
+                            * `norm`: divide each matrix by its Frobenius norm.
+                            *
+        :param verbose: whether to print progress messages.
 
         For gamma priors, you can experiment with three different (alpha, beta)
         values
@@ -103,7 +117,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         alpha_gamma=alpha_gamma, beta_gamma=beta_gamma,
                         alpha_omega=alpha_omega, beta_omega=beta_omega,
                         max_iter=max_iter, margin=margin,
-                        sigma_g=sigma_g, null_threshold=null_threshold,
+                        sigma_g=sigma_g, e_null_thrsh=e_null_thrsh,
+                        a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         verbose=verbose)
         self.X_train = None
         self.a_mu = None
@@ -142,8 +157,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self.margin = params['margin']
         if 'sigma_g' in params:
             self.σ_g = params['sigma_g']
-        if 'null_threshold' in params:
-            self.null_threshold = params['null_threshold']
+        if 'e_null_thrsh' in params:
+            self.e_null_thrsh = params['e_null_thrsh']
+        if 'a_null_thrsh' in params:
+            self.a_null_thrsh = params['a_null_thrsh']
+        if 'k_norm_type' in params:
+            self.k_norm_type = params['k_norm_type']
         if 'verbose' in params:
             self.verbose = params['verbose']
         self.params.update(params)
@@ -231,6 +250,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         )
         a_μ = KmtimesG_mu @ a_Σ / sigma_g**2
         a_sqrd_μ = _calc_a_sqrd_mu(a_μ, a_Σ)
+        a_sqrd_μ[np.abs(a_sqrd_μ) < self.a_null_thrsh] = 0
         return a_Σ, a_μ, a_sqrd_μ
 
     def _update_G(self, N, P, sigma_g, e_sqrd_mu, Km, a_mu, f_mu, b_e_mu,
@@ -269,7 +289,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         )
         b_e_μ = ((np.atleast_2d(f_mu) @ np.r_['1,2', np.ones((N, 1)), G_mu]) @
                  b_e_Σ)
-        b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.null_threshold] = 0
+        b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.e_null_thrsh] = 0
         b_sqrd_μ, e_sqrd_μ, etimesb_μ =\
             _calc_b_e_stats(b_e_μ, b_e_Σ, P)
         return b_e_Σ, b_e_μ, b_sqrd_μ, e_sqrd_μ, etimesb_μ
@@ -484,7 +504,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return y_pred.astype(int)
 
     def predict_proba(self, X_test: np.ndarray) -> np.ndarray:
-        Km, _ = self._create_kernel_matrix(X_test, self.X_train, Km_norms=self.Km_norms)
+        Km, _ = self._create_kernel_matrix(X_test, self.X_train,
+                                           Km_norms=self.Km_norms)
         margin = self.margin
         a_mu = self.a_mu
         a_sigma = self.a_sigma
@@ -535,18 +556,24 @@ def scoring(estimator, X_test, y_test):
     if isinstance(estimator, Pipeline):
         bemkl_model = estimator.named_steps['bemkl']
     e_mu = bemkl_model.b_e_mu[0, 1:]
+    a_mu = bemkl_model.a_mu
     X_train = bemkl_model.X_train
     if len(X_train) != len(X_test):
         # noinspection PyTypeChecker
         nr_kernels_used = len(np.argwhere(
-            np.abs(e_mu) > bemkl_model.null_threshold
+            np.abs(e_mu) > bemkl_model.e_null_thrsh
         ))
         total_kernels = len(e_mu)
+        nr_support_vect = len(np.argwhere(
+            np.abs(a_mu) > bemkl_model.a_null_thrsh
+        ))
+        total_support_vect = len(a_mu)
         print(
             f"{scoring.iteration} - "
-            f"Non-0: {nr_kernels_used}. "
-            f"Total: {total_kernels}. "
-            f"Ratio: {nr_kernels_used/total_kernels}. "
+            f"Kernels: {nr_kernels_used}/{total_kernels} "
+            f"({nr_kernels_used/total_kernels}). "
+            f"SV: {nr_support_vect}/{total_support_vect} "
+            f"({nr_support_vect/total_support_vect}). "
             f"Mean e: {e_mu.mean():0.4f}. "
             f"Median e: {np.median(e_mu):0.4f}. "
             f"Std e: {e_mu.std():0.4f}. "
