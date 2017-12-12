@@ -1,17 +1,13 @@
 from typing import Union, Iterable, Callable, NewType
 
+from matplotlib import pyplot as plt
 import numpy as np
 from numpy.linalg import slogdet
 from scipy.stats import (norm as sp_norm, truncnorm as sp_truncnorm)
-from scipy.spatial.distance import cdist
-from scipy.special import polygamma
+from scipy.special import digamma, loggamma
 import seaborn as sns
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.decomposition import PCA
-from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.preprocessing import Normalizer
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import cross_validate
 
 
 KernelType = NewType('KernelType',
@@ -333,116 +329,106 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return f_μ, f_Σ, normalization
 
     # noinspection PyUnresolvedReferences
-    def _calc_appr_error(self, N, P, lambda_alpha, lambda_beta, a_sqrd_mu,
-                         sigma_g, G_sqrd_mu, a_mu, KmKm, KmtimesG_mu,
-                         gamma_alpha, gamma_beta, b_sqrd_mu, omega_alpha,
-                         omega_beta, e_sqrd_mu, f_mu, f_sigma, b_e_mu, G_mu,
-                         etimesb_mu, a_sigma, G_sigma, b_e_sigma,
-                         normalization):
-        lb = np.nan
-        if self.verbose == 1:
-            lb = 0
+    def _calc_elbo(self, N, P, lambda_alpha, lambda_beta, a_sqrd_mu,
+                   sigma_g, G_sqrd_mu, a_mu, KmKm, KmtimesG_mu,
+                   gamma_alpha, gamma_beta, b_sqrd_mu, omega_alpha,
+                   omega_beta, e_sqrd_mu, f_mu, f_sigma, b_e_mu, G_mu,
+                   etimesb_mu, a_sigma, G_sigma, b_e_sigma,
+                   normalization):
+        lb = 0
 
-            # p(λ)
-            lb = (lb +
-                  sum((self.alpha_lambda - 1) * (polygamma([1], lambda_alpha) +
-                      np.log(lambda_beta)) -
-                      lambda_alpha * lambda_beta / self.beta_lambda -
-                      np.log(np.gamma(self.alpha_lambda)) -
-                      self.alpha_lambda * np.log(self.beta_lambda)))
-            # p(a | λ)
-            lb = (
-                lb -
-                0.5 * sum(lambda_alpha * lambda_beta *
-                          np.diag(a_sqrd_mu)) -
-                0.5 * (N * LOG2PI - sum(polygamma(lambda_alpha) +
-                                        np.log(lambda_beta)))
-            )
-            # p(G | a, Km)
-            lb = (
-                lb -
-                0.5 * sigma_g**(-2) * sum(np.diag(G_sqrd_mu)) +
-                sigma_g**(-2).T @ a_mu @ KmtimesG_mu.T -
-                0.5 * sigma_g**-2 * sum(sum(KmKm * a_sqrd_mu)) -
-                0.5 * N * P * (LOG2PI + 2 * np.log(sigma_g)))
-            # p(γ)
-            lb = (
-                lb +
-                (self.alpha_gamma - 1) * (polygamma(gamma_alpha) +
-                                          np.log(gamma_beta)) -
-                gamma_alpha * gamma_beta / self.beta_gamma -
-                np.log(np.gamma(self.alpha_gamma)) -
-                self.alpha_gamma * np.log(self.beta_gamma)
-            )
-            # p(b | γ)
-            lb = (
-                lb -
-                0.5 * gamma_alpha * gamma_beta * b_sqrd_mu -
-                0.5 * (LOG2PI - (polygamma(gamma_alpha) + np.log(gamma_beta)))
-            )
-            # p(ω)
-            lb = (
-                lb +
-                sum((self.alpha_omega - 1) * (polygamma(omega_alpha) +
-                                              np.log(omega_beta)) -
-                    omega_alpha * omega_beta / self.beta_omega -
-                    np.log(np.gamma(self.alpha_omega)) -
-                    self.alpha_omega * np.log(self.beta_omega))
-            )
-            # p(e | ω)
-            lb = (
-                lb -
-                0.5 * sum(omega_alpha * omega_beta *
-                          np.diag(e_sqrd_mu)) -
-                0.5 * (P * LOG2PI - sum(polygamma(omega_alpha) +
-                                        np.log(omega_beta)))
-            )
-            # p(f | b, e, G)
-            lb = (lb -
-                  0.5 * (f_mu @ f_mu.T + sum(f_sigma)) +
-                  (b_e_mu[1: P] @ G_mu.T) @ f_mu.T +
-                  sum(b_e_mu[1] * f_mu) -
-                  0.5 * sum(sum(e_sqrd_mu * G_sqrd_mu)) -
-                  sum(etimesb_mu @ G_mu.T) -
-                  0.5 * N * b_sqrd_mu -
-                  0.5 * N * LOG2PI)
+        # p(λ)
+        lb += ((self.λ_α - 1) * (digamma(lambda_alpha) + np.log(lambda_beta)) -
+               loggamma(self.λ_α) -
+               lambda_alpha * lambda_beta / self.λ_β -
+               self.λ_α * np.log(self.λ_β)).sum()
 
-            # q(λ)
-            lb = (
-                lb +
-                sum(lambda_alpha +
-                    np.log(lambda_beta) +
-                    np.log(np.gamma(lambda_alpha)) +
-                    (1 - lambda_alpha) * polygamma(lambda_alpha))
-            )
-            # q(a)
-            lb = lb + 0.5 * (N * (LOG2PI + 1) + slogdet(a_sigma)[1])
-            # q(G)
-            lb = lb + 0.5 * N * (P * (LOG2PI + 1) + slogdet(G_sigma)[1])
-            # q(γ)
-            lb = (
-                lb +
-                gamma_alpha +
-                np.log(gamma_beta) +
-                np.log(np.gamma(gamma_alpha)) +
-                (1 - gamma_alpha) * polygamma(gamma_alpha)
-            )
-            # q(ω)
-            lb = (
-                lb +
-                sum(omega_alpha +
-                    np.log(omega_beta) +
-                    np.log(np.gamma(omega_alpha)) +
-                    (1 - omega_alpha) * polygamma(omega_alpha))
-            )
-            # q(b, e)
-            lb = lb + 0.5 * ((P + 1) * (LOG2PI + 1) + np.logdet(b_e_sigma))
-            # q(f)
-            lb = (lb +
-                  0.5 * sum(LOG2PI + f_sigma) +
-                  sum(np.log(normalization)))
+        # p(a | λ)
+        lb -= (
+            0.5 * (lambda_alpha * lambda_beta * np.diag(a_sqrd_mu)).sum() -
+            0.5 * (N * LOG2PI -
+                   (digamma(lambda_alpha) + np.log(lambda_beta)).sum())
+        )
 
-        return lb
+        # p(G | a, Km)
+        lb -= (
+            0.5 * sigma_g**(-2) * np.diag(G_sqrd_mu).sum() +
+            sigma_g**(-2) * a_mu @ KmtimesG_mu.T -
+            0.5 * sigma_g**-2 * (KmKm * a_sqrd_mu).sum() -
+            0.5 * N * P * (LOG2PI + 2 * np.log(sigma_g)))[0, 0]
+
+        # p(γ)
+        lb += (
+            (self.γ_α - 1) * (digamma(gamma_alpha) + np.log(gamma_beta)) -
+            gamma_alpha * gamma_beta / self.γ_β -
+            loggamma(self.γ_α) -
+            self.γ_α * np.log(self.γ_β)
+        )
+
+        # p(b | γ)
+        lb -= (
+            0.5 * gamma_alpha * gamma_beta * b_sqrd_mu -
+            0.5 * (LOG2PI - (digamma(gamma_alpha) + np.log(gamma_beta)))
+        )
+
+        # p(ω)
+        lb += (
+            ((self.ω_α - 1) * (digamma(omega_alpha) + np.log(omega_beta)) -
+             omega_alpha * omega_beta / self.ω_β -
+             loggamma(self.ω_α) -
+             self.ω_α * np.log(self.ω_β)).sum()
+        )
+
+        # p(e | ω)
+        lb -= (
+            0.5 * (omega_alpha * omega_beta *
+                   np.diag(e_sqrd_mu)).sum() -
+            0.5 * (P * LOG2PI - (digamma(omega_alpha) +
+                                 np.log(omega_beta)).sum())
+        )
+
+        # p(f | b, e, G)
+        lb -= (0.5 * (f_mu @ f_mu.T + f_sigma.sum()) +
+               (b_e_mu[0, 1:] @ G_mu.T) @ f_mu.T +
+               (b_e_mu[0, 0] * f_mu).sum() -
+               0.5 * (e_sqrd_mu * G_sqrd_mu).sum() -
+               (etimesb_mu @ G_mu.T).sum() -
+               0.5 * N * b_sqrd_mu -
+               0.5 * N * LOG2PI)[0, 0]
+
+        # q(λ)
+        lb += (lambda_alpha +
+               np.log(lambda_beta) +
+               loggamma(lambda_alpha) +
+               (1 - lambda_alpha) * digamma(lambda_alpha)).sum()
+
+        # q(a)
+        lb += 0.5 * (N * (LOG2PI + 1) + slogdet(a_sigma)[1])
+
+        # q(G)
+        lb += 0.5 * N * (P * (LOG2PI + 1) + slogdet(G_sigma)[1])
+
+        # q(γ)
+        lb += (
+            gamma_alpha +
+            np.log(gamma_beta) +
+            loggamma(gamma_alpha) +
+            (1 - gamma_alpha) * digamma(gamma_alpha)
+        )
+
+        # q(ω)
+        lb += (omega_alpha +
+               np.log(omega_beta) +
+               loggamma(omega_alpha) +
+               (1 - omega_alpha) * digamma(omega_alpha)).sum()
+
+        # q(b, e)
+        lb += 0.5 * ((P + 1) * (LOG2PI + 1) + slogdet(b_e_sigma))[0]
+
+        # q(f)
+        lb += (0.5 * (LOG2PI + f_sigma).sum() + np.log(normalization).sum())
+
+        return lb.real
 
     def fit(self, X_train: np.ndarray, y_train: np.ndarray) -> "BEMKL":
         X_train = np.asarray(X_train)
@@ -471,7 +457,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         upper_bound = 1e40 * np.ones(N)
         upper_bound[y_train < 0] = -self.margin
 
-        bounds = np.zeros(self.max_iter)
+        self.bounds = np.zeros(self.max_iter)
 
         a_sqrd_mu = _calc_a_sqrd_mu(a_mu, a_sigma)
         G_sqrd_mu, KmtimesG_mu = _calc_G_stats(N, P, G_mu, G_sigma, Km)
@@ -500,13 +486,15 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             f_mu, f_sigma, normalization = self._update_f(
                 N, G_mu, b_e_mu, lower_bound, upper_bound
             )
-            bounds[i] = self._calc_appr_error(
+            self.bounds[i] = self._calc_elbo(
                 N, P, lambda_alpha, lambda_beta, a_sqrd_mu, sigma_g,
                 G_sqrd_mu, a_mu, KmKm, KmtimesG_mu, gamma_alpha, gamma_beta,
                 b_sqrd_mu, omega_alpha, omega_beta, e_sqrd_mu, f_mu, f_sigma,
                 b_e_mu, G_mu, etimesb_mu, a_sigma, G_sigma, b_e_sigma,
                 normalization
             )
+            if self.verbose and (i % self.verbose == 0):
+                print(f"Iter: {i}. Bound: {self.bounds[i]}")
 
         self.total_kernels = P
         self.total_sv = N
@@ -587,46 +575,25 @@ class BEMKL(BaseEstimator, ClassifierMixin):
     def plot_e(self, **kwargs):
         ax = sns.distplot(self.e_mu_orig, kde=False, **kwargs)
         ax2 = ax.twinx()
-        sns.distplot(self.e_mu_orig, hist=False, ax=ax2)
+        sns.kdeplot(self.e_mu_orig, ax=ax2)
+        ax.set_ylabel('Count')
+        ax.set_xlabel(r'$e_\mu$ value')
+        ax2.set_ylabel('Density')
 
     def plot_a(self, **kwargs):
         ax = sns.distplot(self.a_mu_orig, kde=False, **kwargs)
         ax2 = ax.twinx()
-        sns.distplot(self.a_mu_orig, hist=False, ax=ax2)
+        sns.kdeplot(self.a_mu_orig, ax=ax2)
+        ax.set_ylabel('Count')
+        ax.set_xlabel(r'$a_\mu$ value')
+        ax2.set_ylabel('Density')
 
-
-# noinspection PyPep8Naming
-def poly_kernel(A, B, c, d):
-    return (A @ B.T + c)**d
-
-
-# noinspection PyPep8Naming
-def gauss_kernel(A, B, sigma):
-    return np.exp(- cdist(A, B, metric='sqeuclidean')/sigma)
-
-
-# noinspection PyPep8Naming
-def scoring(estimator, X_test, y_test):
-    if 'iteration' not in dir(scoring):
-        scoring.iteration = 0
-    y_pred = estimator.predict(X_test)
-    score = accuracy_score(y_test, y_pred)
-    bemkl_model = estimator
-    if isinstance(estimator, Pipeline):
-        bemkl_model = estimator.named_steps['bemkl']
-    e_mu = bemkl_model.b_e_mu[0, 1:]
-    X_train = bemkl_model.X_train
-    if len(X_train) != len(X_test):
-        print(
-            f"{scoring.iteration} - "
-            f"Kernels: {bemkl_model.nr_kernels_used}/"
-            f"{bemkl_model.total_kernels} "
-            f"({bemkl_model.nr_kernels_used/bemkl_model.total_kernels}). "
-            f"SV: {bemkl_model.nr_sv_used}/{bemkl_model.total_sv} "
-            f"({bemkl_model.nr_sv_used/bemkl_model.total_sv}). "
-            f"Mean e: {e_mu.mean():0.4f}. "
-            f"Median e: {np.median(e_mu):0.4f}. "
-            f"Std e: {e_mu.std():0.4f}. "
-         )
-        scoring.iteration += 1
-    return score
+    def plot_bounds(self, **kwargs):
+        if 'ax' in kwargs:
+            ax = kwargs['ax']
+            del kwargs['ax']
+        else:
+            ax = plt.figure(figsize=(8, 8)).gca()
+        ax.plot(self.bounds, **kwargs)
+        ax.set_ylabel('ELBO')
+        ax.set_xlabel('Iteration')
