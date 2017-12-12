@@ -585,10 +585,14 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return np.r_['0,2', 1-y_pred_proba, y_pred_proba].T
 
     def plot_e(self, **kwargs):
-        sns.distplot(self.e_mu_orig, **kwargs)
+        ax = sns.distplot(self.e_mu_orig, kde=False, **kwargs)
+        ax2 = ax.twinx()
+        sns.distplot(self.e_mu_orig, hist=False, ax=ax2)
 
     def plot_a(self, **kwargs):
-        sns.distplot(self.a_mu_orig, **kwargs)
+        ax = sns.distplot(self.a_mu_orig, kde=False, **kwargs)
+        ax2 = ax.twinx()
+        sns.distplot(self.a_mu_orig, hist=False, ax=ax2)
 
 
 # noinspection PyPep8Naming
