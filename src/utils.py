@@ -12,9 +12,7 @@ from sklearn.metrics import (accuracy_score, auc, roc_curve, confusion_matrix,
 from sklearn.model_selection import cross_validate, RepeatedStratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from yellowbrick.classifier import (ClassificationReport, ROCAUC,
-                                    ConfusionMatrix,
-                                    DecisionBoundariesVisualizer)
+from yellowbrick.classifier import DecisionBoundariesVisualizer
 
 heatmap_cmap = ListedColormap(sns.color_palette('rocket').as_hex())
 
@@ -199,7 +197,7 @@ def plot_rocauc(y_test, y_score, ax=None):
     ax.set_ylim([0.0, 1.05])
     ax.set_xlabel('False Positive Rate')
     ax.set_ylabel('True Positive Rate')
-    ax.set_title('Receiver operating characteristic example')
+    ax.set_title('Receiver operating characteristic')
     ax.legend(loc="lower right")
     return
 
@@ -218,15 +216,15 @@ def plot_confusion_matrix(y_test, y_pred, cmap=heatmap_cmap, ax=None):
 
     ax_pos = ax.get_position()
     cbar_pos = [
-        ax_pos.x0 + ax_pos.width + 0.023,
-        ax_pos.y0 + ax_pos.height*0.05,
-        ax_pos.width*0.04,
-        ax_pos.height - ax_pos.height*0.1,
+        ax_pos.x0 + ax_pos.width*0.05,
+        ax_pos.y0 - 0.043,  # + ax_pos.height,
+        ax_pos.width - ax_pos.width*0.1,
+        ax_pos.height*0.04,
     ]
     fig = ax.figure
     cax = fig.add_axes(cbar_pos)
     im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
-    fig.colorbar(im, cax=cax, orientation='vertical')
+    fig.colorbar(im, cax=cax, orientation='horizontal')
     cax.tick_params(labelsize='xx-small', )
 
     tick_marks = np.arange(len(classes))

@@ -44,6 +44,27 @@ def _calc_b_e_stats(b_e_mu, b_e_sigma, P):
     return b_sqrd_μ, e_sqrd_μ, etimesb_μ
 
 
+def _plot_distplot(data, name, alpha=0.3, **kwargs):
+    if 'ax' in kwargs:
+        ax = kwargs['ax']
+        del kwargs['ax']
+    else:
+        ax = plt.figure(figsize=(8, 8)).gca()
+
+    if 'ax2' in kwargs:
+        ax2 = kwargs['ax2']
+        del kwargs['ax2']
+    else:
+        ax2 = ax.twinx()
+
+    sns.distplot(data, kde=False, ax=ax, **kwargs)
+    sns.kdeplot(data, ax=ax2)
+    ax.set_ylabel('Count')
+    ax.set_xlabel(f'{name} value')
+    ax2.set_ylabel('Density')
+    return ax, ax2
+
+
 # noinspection PyPep8Naming,PyMethodMayBeStatic,PyArgumentList
 class BEMKL(BaseEstimator, ClassifierMixin):
     def __init__(self, kernels: Iterable[KernelType],
@@ -573,20 +594,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return np.r_['0,2', 1-y_pred_proba, y_pred_proba].T
 
     def plot_e(self, **kwargs):
-        ax = sns.distplot(self.e_mu_orig, kde=False, **kwargs)
-        ax2 = ax.twinx()
-        sns.kdeplot(self.e_mu_orig, ax=ax2)
-        ax.set_ylabel('Count')
-        ax.set_xlabel(r'$e_\mu$ value')
-        ax2.set_ylabel('Density')
+        return _plot_distplot(self.e_mu_orig, r'$e_\mu$', **kwargs)
 
     def plot_a(self, **kwargs):
-        ax = sns.distplot(self.a_mu_orig, kde=False, **kwargs)
-        ax2 = ax.twinx()
-        sns.kdeplot(self.a_mu_orig, ax=ax2)
-        ax.set_ylabel('Count')
-        ax.set_xlabel(r'$a_\mu$ value')
-        ax2.set_ylabel('Density')
+        return _plot_distplot(self.a_mu_orig, r'$a_\mu$', **kwargs)
 
     def plot_bounds(self, **kwargs):
         if 'ax' in kwargs:
@@ -597,3 +608,4 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         ax.plot(self.bounds, **kwargs)
         ax.set_ylabel('ELBO')
         ax.set_xlabel('Iteration')
+        return ax
