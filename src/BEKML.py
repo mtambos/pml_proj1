@@ -285,7 +285,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         )
         a_μ = KmtimesG_mu @ a_Σ / sigma_g**2
         a_sqrd_μ = _calc_a_sqrd_mu(a_μ, a_Σ)
-        a_sqrd_μ[np.abs(a_sqrd_μ) < self.a_null_thrsh] = 0
+        # a_sqrd_μ[np.abs(a_sqrd_μ) < self.a_null_thrsh] = 0
         return a_Σ, a_μ, a_sqrd_μ
 
     def _update_G(self, N, P, sigma_g, e_sqrd_mu, Km, a_mu, f_mu, b_e_mu,
@@ -324,7 +324,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         )
         b_e_μ = ((np.atleast_2d(f_mu) @ np.r_['1,2', np.ones((N, 1)), G_mu]) @
                  b_e_Σ)
-        b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.e_null_thrsh] = 0
+        # b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.e_null_thrsh] = 0
         b_sqrd_μ, e_sqrd_μ, etimesb_μ =\
             _calc_b_e_stats(b_e_μ, b_e_Σ, P)
         return b_e_Σ, b_e_μ, b_sqrd_μ, e_sqrd_μ, etimesb_μ
