@@ -1,4 +1,4 @@
-from typing import Union, Iterable, Callable, NewType
+from typing import Union, Iterable, Callable
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -10,9 +10,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.decomposition import PCA
 
 
-KernelType = NewType('KernelType',
-                     Callable[[np.ndarray, np.ndarray],
-                              Union[float, np.ndarray]])
+KernelType = Callable[[np.ndarray, np.ndarray], Union[float, np.ndarray]]
 
 
 LOG2PI = np.log(2 * np.pi)
@@ -75,7 +73,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
                  a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
                  filter_kernels: bool=True, filter_sv: bool=True,
-                 verbose: bool=False):
+                 verbose: bool=False) -> None:
         """
         :param kernels: iterable of kernels used to build the kernel matrix.
                         A kernel is a function k(A, B, *args) that takes a
@@ -134,7 +132,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         (1e-10, 1e+10) => good for obtaining sparsity
         (1e-10, 1e-10) => good for small sample size problems
         """
-        self.params = {}
+        self.params: dict = {}
         self.set_params(kernels=kernels, random_state=random_state,
                         alpha_lambda=alpha_lambda, beta_lambda=beta_lambda,
                         alpha_gamma=alpha_gamma, beta_gamma=beta_gamma,
@@ -144,13 +142,14 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         filter_kernels=filter_kernels, filter_sv=filter_sv,
                         verbose=verbose)
-        self.X_train = None
-        self.a_mu = None
-        self.a_sigma = None
-        self.b_e_mu = None
-        self.b_e_sigma = None
-        self.sigma_g = None
-        self.Km_norms = None
+        self.X_train: np.ndarray = None
+        self.a_mu: np.ndarray = None
+        self.a_sigma: np.ndarray = None
+        self.b_e_mu: np.ndarray = None
+        self.b_e_sigma: np.ndarray = None
+        self.sigma_g: np.ndarray = None
+        self.Km_norms: np.ndarray = None
+        self.init_vars: dict = None
 
     def get_params(self, deep=True):
         return self.params
@@ -451,7 +450,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
 
         return lb.real
 
-    def fit(self, X_train: np.ndarray, y_train: np.ndarray) -> "BEMKL":
+    def fit(self, X_train: np.ndarray, y_train: np.ndarray)\
+            -> "BEMKL":
         X_train = np.asarray(X_train)
         y_train = np.asarray(y_train).flatten()
         self.X_train = X_train
@@ -469,6 +469,24 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         b_e_mu, b_e_sigma = self._init_b_e(P)
         f_mu, f_sigma = self._init_f(y_train)
         sigma_g = self.σ_g
+
+        self.init_vars = {
+            'lambda_alpha': lambda_alpha,
+            'lambda_beta': lambda_beta,
+            'a_mu': a_mu,
+            'a_sigma': a_sigma,
+            'G_mu': G_mu,
+            'G_sigma': G_sigma,
+            'gamma_alpha': gamma_alpha,
+            'gamma_beta': gamma_beta,
+            'omega_alpha': omega_alpha,
+            'omega_beta': omega_beta,
+            'b_e_mu': b_e_mu,
+            'b_e_sigma': b_e_sigma,
+            'f_mu': f_mu,
+            'f_sigma': f_sigma,
+            'sigma_g': sigma_g,
+        }
 
         KmKm = self._calc_KmKm(Km)
         Km = Km.reshape((P * N, N))
