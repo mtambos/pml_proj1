@@ -1,4 +1,5 @@
-from typing import Union, Iterable, Callable
+from typing import Union, Iterable, Callable, List
+from pprint import pformat
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -19,6 +20,13 @@ LOG2PI = np.log(2 * np.pi)
 def truncnorm(a=np.infty, b=np.infty, loc=0, scale=1):
     a, b = (a - loc) / scale, (b - loc) / scale
     return sp_truncnorm(a=a, b=b, loc=loc, scale=scale)
+
+
+def logdet(A):
+    s, ret_val = slogdet(A)
+    if s < 0:
+        raise ValueError(f"A must be positive definite")
+    return ret_val
 
 
 def _calc_a_sqrd_mu(a_mu, a_sigma):
@@ -73,7 +81,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
                  a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
                  filter_kernels: bool=True, filter_sv: bool=True,
-                 verbose: bool=False) -> None:
+                 verbose: bool=False, init_vars: dict=None) -> None:
         """
         :param kernels: iterable of kernels used to build the kernel matrix.
                         A kernel is a function k(A, B, *args) that takes a
@@ -141,7 +149,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         sigma_g=sigma_g, e_null_thrsh=e_null_thrsh,
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         filter_kernels=filter_kernels, filter_sv=filter_sv,
-                        verbose=verbose)
+                        verbose=verbose, init_vars=init_vars)
         self.X_train: np.ndarray = None
         self.a_mu: np.ndarray = None
         self.a_sigma: np.ndarray = None
@@ -149,7 +157,6 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         self.b_e_sigma: np.ndarray = None
         self.sigma_g: np.ndarray = None
         self.Km_norms: np.ndarray = None
-        self.init_vars: dict = None
 
     def get_params(self, deep=True):
         return self.params
@@ -157,43 +164,117 @@ class BEMKL(BaseEstimator, ClassifierMixin):
     # noinspection PyAttributeOutsideInit
     def set_params(self, **params):
         if 'kernels' in params:
-            self.kernels = np.asarray(params['kernels'])
+            self._kernels = np.asarray(params['kernels'])
         if 'random_state' in params:
-            self.random_state = params['random_state']
+            self._random_state = params['random_state']
             if not isinstance(self.random_state, np.random.RandomState):
-                self.random_state = np.random.RandomState(self.random_state)
+                self._random_state = np.random.RandomState(self.random_state)
         if 'alpha_lambda' in params:
-            self.λ_α = params['alpha_lambda']
+            self._λ_α = params['alpha_lambda']
         if 'beta_lambda' in params:
-            self.λ_β = params['beta_lambda']
+            self._λ_β = params['beta_lambda']
         if 'alpha_gamma' in params:
-            self.γ_α = params['alpha_gamma']
+            self._γ_α = params['alpha_gamma']
         if 'beta_gamma' in params:
-            self.γ_β = params['beta_gamma']
+            self._γ_β = params['beta_gamma']
         if 'alpha_omega' in params:
-            self.ω_α = params['alpha_omega']
+            self._ω_α = params['alpha_omega']
         if 'beta_omega' in params:
-            self.ω_β = params['beta_omega']
+            self._ω_β = params['beta_omega']
         if 'max_iter' in params:
-            self.max_iter = params['max_iter']
+            self._max_iter = params['max_iter']
         if 'margin' in params:
-            self.margin = params['margin']
+            self._margin = params['margin']
         if 'sigma_g' in params:
-            self.σ_g = params['sigma_g']
+            self._σ_g = params['sigma_g']
         if 'e_null_thrsh' in params:
-            self.e_null_thrsh = params['e_null_thrsh']
+            self._e_null_thrsh = params['e_null_thrsh']
         if 'a_null_thrsh' in params:
-            self.a_null_thrsh = params['a_null_thrsh']
+            self._a_null_thrsh = params['a_null_thrsh']
         if 'k_norm_type' in params:
-            self.k_norm_type = params['k_norm_type']
+            self._k_norm_type = params['k_norm_type']
         if 'filter_kernels' in params:
-            self.filter_kernels = params['filter_kernels']
+            self._filter_kernels = params['filter_kernels']
         if 'filter_sv' in params:
-            self.filter_sv = params['filter_sv']
+            self._filter_sv = params['filter_sv']
         if 'verbose' in params:
-            self.verbose = params['verbose']
+            self._verbose = params['verbose']
+        if 'init_vars' in params:
+            self._init_vars = params['init_vars']
         self.params.update(params)
         return self
+
+    @property
+    def kernels(self):
+        return self._kernels
+
+    @property
+    def random_state(self):
+        return self._random_state
+
+    @property
+    def λ_α(self):
+        return self._λ_α
+
+    @property
+    def λ_β(self):
+        return self._λ_β
+
+    @property
+    def γ_α(self):
+        return self._γ_α
+
+    @property
+    def γ_β(self):
+        return self._γ_β
+
+    @property
+    def ω_α(self):
+        return self._ω_α
+
+    @property
+    def ω_β(self):
+        return self._ω_β
+
+    @property
+    def max_iter(self):
+        return self._max_iter
+
+    @property
+    def margin(self):
+        return self._margin
+
+    @property
+    def σ_g(self):
+        return self._σ_g
+
+    @property
+    def e_null_thrsh(self):
+        return self._e_null_thrsh
+
+    @property
+    def a_null_thrsh(self):
+        return self._a_null_thrsh
+
+    @property
+    def k_norm_type(self):
+        return self._k_norm_type
+
+    @property
+    def filter_kernels(self):
+        return self._filter_kernels
+
+    @property
+    def filter_sv(self):
+        return self._filter_sv
+
+    @property
+    def verbose(self):
+        return self._verbose
+
+    @property
+    def init_vars(self):
+        return self._init_vars
 
     def _create_kernel_matrix(self, X1, X2, Km_norms=None):
         N1, _ = X1.shape
@@ -356,99 +437,149 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                    etimesb_mu, a_sigma, G_sigma, b_e_sigma,
                    normalization):
         lb = 0
+        factors = {}
+        # log(p(λ))
+        log_p_λ = np.sum(
+            (self.λ_α - 1) * (digamma(lambda_alpha) + np.log(lambda_beta))
+            - lambda_alpha * lambda_beta / self.λ_β
+            - loggamma(self.λ_α)
+            - self.λ_α * np.log(self.λ_β)
+        ).real
+        lb += log_p_λ
+        factors['log_p_λ'] = log_p_λ
 
-        # p(λ)
-        lb += ((self.λ_α - 1) * (digamma(lambda_alpha) + np.log(lambda_beta)) -
-               loggamma(self.λ_α) -
-               lambda_alpha * lambda_beta / self.λ_β -
-               self.λ_α * np.log(self.λ_β)).sum()
-
-        # p(a | λ)
-        lb -= (
-            0.5 * (lambda_alpha * lambda_beta * np.diag(a_sqrd_mu)).sum() -
-            0.5 * (N * LOG2PI -
-                   (digamma(lambda_alpha) + np.log(lambda_beta)).sum())
+        # log(p(a | λ))
+        log_p_a_λ = (
+            - 0.5 * np.sum(lambda_alpha * lambda_beta * np.diag(a_sqrd_mu))
+            - 0.5 * N * LOG2PI
+            + 0.5 * np.sum(digamma(lambda_alpha) + np.log(lambda_beta))
         )
+        lb += log_p_a_λ
+        factors['log_p_a_λ'] = log_p_a_λ
 
-        # p(G | a, Km)
-        lb -= (
-            0.5 * sigma_g**(-2) * np.diag(G_sqrd_mu).sum() +
-            sigma_g**(-2) * a_mu @ KmtimesG_mu.T -
-            0.5 * sigma_g**-2 * (KmKm * a_sqrd_mu).sum() -
-            0.5 * N * P * (LOG2PI + 2 * np.log(sigma_g)))[0, 0]
+        # log(p(G | a, Km))
+        log_p_G_a_Km = (
+            - 0.5 * sigma_g**(-2) * np.sum(np.diag(G_sqrd_mu))
+            + sigma_g**(-2) * a_mu @ KmtimesG_mu.T
+            - 0.5 * sigma_g**-2 * np.sum(KmKm * a_sqrd_mu)
+            - 0.5 * N * P * (LOG2PI + 2 * np.log(sigma_g))
+        )[0, 0]
+        lb += log_p_G_a_Km
+        factors['log_p_G_a_Km'] = log_p_G_a_Km
 
-        # p(γ)
-        lb += (
-            (self.γ_α - 1) * (digamma(gamma_alpha) + np.log(gamma_beta)) -
-            gamma_alpha * gamma_beta / self.γ_β -
-            loggamma(self.γ_α) -
-            self.γ_α * np.log(self.γ_β)
+        # log(p(γ))
+        log_p_γ = (
+            (self.γ_α - 1) * (digamma(gamma_alpha) + np.log(gamma_beta))
+            - gamma_alpha * gamma_beta / self.γ_β
+            - loggamma(self.γ_α)
+            - self.γ_α * np.log(self.γ_β)
+        ).real
+        lb += log_p_γ
+        factors['log_p_γ'] = log_p_γ
+
+        # log(p(b | γ))
+        log_p_b_γ = (
+            - 0.5 * gamma_alpha * gamma_beta * b_sqrd_mu
+            - 0.5 * (LOG2PI - (digamma(gamma_alpha) + np.log(gamma_beta)))
         )
+        lb += log_p_b_γ
+        factors['log_p_b_γ'] = log_p_b_γ
 
-        # p(b | γ)
-        lb -= (
-            0.5 * gamma_alpha * gamma_beta * b_sqrd_mu -
-            0.5 * (LOG2PI - (digamma(gamma_alpha) + np.log(gamma_beta)))
+        # log(p(ω))
+        log_p_ω = np.sum(
+            (self.ω_α - 1) * (digamma(omega_alpha) + np.log(omega_beta))
+            - omega_alpha * omega_beta / self.ω_β
+            - loggamma(self.ω_α)
+            - self.ω_α * np.log(self.ω_β)
+        ).real
+        lb += log_p_ω
+        factors['log_p_ω'] = log_p_ω
+
+        # log(p(e | ω))
+        log_p_e_ω = (
+            - 0.5 * np.sum(omega_alpha * omega_beta * np.diag(e_sqrd_mu))
+            - 0.5 * P * LOG2PI
+            + 0.5 * np.sum(digamma(omega_alpha) + np.log(omega_beta))
         )
+        lb += log_p_e_ω
+        factors['log_p_e_ω'] = log_p_e_ω
 
-        # p(ω)
-        lb += (
-            ((self.ω_α - 1) * (digamma(omega_alpha) + np.log(omega_beta)) -
-             omega_alpha * omega_beta / self.ω_β -
-             loggamma(self.ω_α) -
-             self.ω_α * np.log(self.ω_β)).sum()
+        # log(p(f | b, e, G))
+        log_p_f_b_e_G = (
+            - 0.5 * (f_mu @ f_mu.T + np.sum(f_sigma))
+            + (b_e_mu[0, 1:] @ G_mu.T) @ f_mu.T
+            + np.sum(b_e_mu[0, 0] * f_mu)
+            - 0.5 * np.sum(e_sqrd_mu * G_sqrd_mu)
+            - np.sum(etimesb_mu @ G_mu.T)
+            - 0.5 * N * b_sqrd_mu
+            - 0.5 * N * LOG2PI
+        )[0, 0]
+        lb += log_p_f_b_e_G
+        factors['log_p_f_b_e_G'] = log_p_f_b_e_G
+
+        # log(q(λ))
+        log_q_λ = np.sum(
+            - lambda_alpha
+            - np.log(lambda_beta)
+            - loggamma(lambda_alpha)
+            - (1 - lambda_alpha) * digamma(lambda_alpha)
+        ).real
+        lb -= log_q_λ
+        factors['log_q_λ'] = log_q_λ
+
+        # log(q(a))
+        log_q_a = (
+            - 0.5 * N * (LOG2PI + 1)
+            - 0.5 * logdet(a_sigma)
         )
+        lb -= log_q_a
+        factors['log_q_a'] = log_q_a
 
-        # p(e | ω)
-        lb -= (
-            0.5 * (omega_alpha * omega_beta *
-                   np.diag(e_sqrd_mu)).sum() -
-            0.5 * (P * LOG2PI - (digamma(omega_alpha) +
-                                 np.log(omega_beta)).sum())
+        # log(q(G))
+        log_q_G = (
+            - 0.5 * N * P * (LOG2PI + 1)
+            - 0.5 * N * logdet(G_sigma)
         )
+        lb -= log_q_G
+        factors['log_q_G'] = log_q_G
 
-        # p(f | b, e, G)
-        lb -= (0.5 * (f_mu @ f_mu.T + f_sigma.sum()) +
-               (b_e_mu[0, 1:] @ G_mu.T) @ f_mu.T +
-               (b_e_mu[0, 0] * f_mu).sum() -
-               0.5 * (e_sqrd_mu * G_sqrd_mu).sum() -
-               (etimesb_mu @ G_mu.T).sum() -
-               0.5 * N * b_sqrd_mu -
-               0.5 * N * LOG2PI)[0, 0]
+        # log(q(γ))
+        log_q_γ = (
+            - gamma_alpha
+            - np.log(gamma_beta)
+            - loggamma(gamma_alpha)
+            - (1 - gamma_alpha) * digamma(gamma_alpha)
+        ).real
+        lb -= log_q_γ
+        factors['log_q_γ'] = log_q_γ
 
-        # q(λ)
-        lb += (lambda_alpha +
-               np.log(lambda_beta) +
-               loggamma(lambda_alpha) +
-               (1 - lambda_alpha) * digamma(lambda_alpha)).sum()
+        # log(q(ω))
+        log_q_ω = np.sum(
+            - omega_alpha
+            - np.log(omega_beta)
+            - loggamma(omega_alpha)
+            - (1 - omega_alpha) * digamma(omega_alpha)
+        ).real
+        lb -= log_q_ω
+        factors['log_q_ω'] = log_q_ω
 
-        # q(a)
-        lb += 0.5 * (N * (LOG2PI + 1) + slogdet(a_sigma)[1])
-
-        # q(G)
-        lb += 0.5 * N * (P * (LOG2PI + 1) + slogdet(G_sigma)[1])
-
-        # q(γ)
-        lb += (
-            gamma_alpha +
-            np.log(gamma_beta) +
-            loggamma(gamma_alpha) +
-            (1 - gamma_alpha) * digamma(gamma_alpha)
+        # log(q(b, e))
+        log_q_b_e = (
+            - 0.5 * (P + 1) * (LOG2PI + 1)
+            - 0.5 * logdet(b_e_sigma)
         )
+        lb -= log_q_b_e
+        factors['log_q_b_e'] = log_q_b_e
 
-        # q(ω)
-        lb += (omega_alpha +
-               np.log(omega_beta) +
-               loggamma(omega_alpha) +
-               (1 - omega_alpha) * digamma(omega_alpha)).sum()
+        # log(q(f))
+        log_q_f = np.sum(
+            - 0.5 * (LOG2PI + f_sigma)
+            - np.log(normalization)
+        )
+        lb -= log_q_f
+        factors['log_q_f'] = log_q_f
 
-        # q(b, e)
-        lb += 0.5 * ((P + 1) * (LOG2PI + 1) + slogdet(b_e_sigma))[0]
-
-        # q(f)
-        lb += (0.5 * (LOG2PI + f_sigma).sum() + np.log(normalization).sum())
-
-        return lb.real
+        return lb.real, factors
 
     def fit(self, X_train: np.ndarray, y_train: np.ndarray)\
             -> "BEMKL":
@@ -460,33 +591,33 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         P = len(self.kernels)
         Km, Km_norms = self._create_kernel_matrix(X_train, X_train)
         self.Km_norms = Km_norms
+        self.Km_train = Km
 
         lambda_alpha, lambda_beta = self._init_λ(N)
-        a_mu, a_sigma = self._init_a(N)
-        G_mu, G_sigma = self._init_G(y_train, P)
         gamma_alpha, gamma_beta = self._init_γ()
         omega_alpha, omega_beta = self._init_ω(P)
         b_e_mu, b_e_sigma = self._init_b_e(P)
-        f_mu, f_sigma = self._init_f(y_train)
         sigma_g = self.σ_g
-
-        self.init_vars = {
-            'lambda_alpha': lambda_alpha,
-            'lambda_beta': lambda_beta,
-            'a_mu': a_mu,
-            'a_sigma': a_sigma,
-            'G_mu': G_mu,
-            'G_sigma': G_sigma,
-            'gamma_alpha': gamma_alpha,
-            'gamma_beta': gamma_beta,
-            'omega_alpha': omega_alpha,
-            'omega_beta': omega_beta,
-            'b_e_mu': b_e_mu,
-            'b_e_sigma': b_e_sigma,
-            'f_mu': f_mu,
-            'f_sigma': f_sigma,
-            'sigma_g': sigma_g,
-        }
+        if not self.init_vars:
+            a_mu, a_sigma = self._init_a(N)
+            G_mu, G_sigma = self._init_G(y_train, P)
+            f_mu, f_sigma = self._init_f(y_train)
+            self._init_vars = {
+                'a_mu': a_mu,
+                'a_sigma': a_sigma,
+                'G_mu': G_mu,
+                'G_sigma': G_sigma,
+                'f_mu': f_mu,
+                'f_sigma': f_sigma,
+            }
+        else:
+            init_vars = self._init_vars
+            a_mu = init_vars['a_mu']
+            a_sigma = init_vars['a_sigma']
+            G_mu = init_vars['G_mu']
+            G_sigma = init_vars['G_sigma']
+            f_mu = init_vars['f_mu']
+            f_sigma = init_vars['f_sigma']
 
         KmKm = self._calc_KmKm(Km)
         Km = Km.reshape((P * N, N))
@@ -496,13 +627,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         upper_bound = 1e40 * np.ones(N)
         upper_bound[y_train < 0] = -self.margin
 
-        self.bounds = np.zeros(self.max_iter)
+        self.bounds: List = [None] * self.max_iter
 
         a_sqrd_mu = _calc_a_sqrd_mu(a_mu, a_sigma)
         G_sqrd_mu, KmtimesG_mu = _calc_G_stats(N, P, G_mu, G_sigma, Km)
         b_sqrd_mu, e_sqrd_mu, etimesb_mu =\
             _calc_b_e_stats(b_e_mu, b_e_sigma, P)
-
         for i in range(self.max_iter):
             lambda_beta = self._update_λ(a_sqrd_mu)
 
@@ -532,8 +662,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                 b_e_mu, G_mu, etimesb_mu, a_sigma, G_sigma, b_e_sigma,
                 normalization
             )
-            if self.verbose and (i % self.verbose == 0):
-                print(f"Iter: {i}. Bound: {self.bounds[i]}")
+            if self.verbose and (i % self.verbose == 0 or
+                                 i == self.max_iter - 1):
+                print(f"Iter: {i}. Bound: {self.bounds[i][0]}")
+#                print(f"Iter: {i}. Bound: {self.bounds[i][0]}.\n"
+#                      f"Factors: {pformat(self.bounds[i][1])}")
+#                raise
 
         self.total_kernels = P
         self.total_sv = N
@@ -553,7 +687,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             b_mu = b_e_mu[0, 0]
             mask = np.abs(e_mu) > self.e_null_thrsh
             e_mu = e_mu[mask]
-            self.kernels = self.kernels[mask]
+            self._kernels = self.kernels[mask]
             b_e_mu = np.r_[b_mu, e_mu].reshape(1, len(e_mu)+1)
             mask = np.r_[[True], mask]
             b_e_sigma = b_e_sigma[mask][:, mask]
@@ -587,6 +721,9 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         else:
             Km, _ = self._create_kernel_matrix(X_test, self.X_train,
                                                Km_norms=self.Km_norms)
+
+        self.Km_test = Km
+
         margin = self.margin
         a_mu = self.a_mu
         a_sigma = self.a_sigma
