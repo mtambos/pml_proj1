@@ -106,7 +106,8 @@ def plot_decision_boundaries(model, X_train, y_train,
     ax.legend()
 
 
-def plot_kernel_importances(e_mu_orig, kernel_attrs, colormap=HEATMAP_CMAP):
+def plot_kernel_importances(e_mu_orig, kernel_attrs, colormap=HEATMAP_CMAP,
+                            vminmax=None):
     kernel_attrs = np.asarray(kernel_attrs)
     df = pd.DataFrame(np.c_[e_mu_orig, kernel_attrs],
                       columns=['e_mu', 'kernel', 'features', 'parameter'])\
@@ -116,10 +117,14 @@ def plot_kernel_importances(e_mu_orig, kernel_attrs, colormap=HEATMAP_CMAP):
     kernel_nr = len(set(df.kernel))
     fig, axes = plt.subplots(1, kernel_nr, figsize=(8*kernel_nr, 8))
     axes = axes.flatten()
-    vmin, vmax = df.e_mu.min(), df.e_mu.max()
     for ax, (kernel, group) in zip(axes, df.groupby('kernel')):
+        if vminmax is None:
+            vmin, vmax = group.e_mu.min(), df.e_mu.max()
+        else:
+            vmin, vmax = vminmax[0][kernel], vminmax[1][kernel]
         group = group.pivot("parameter", "features", "e_mu")
-        sns.heatmap(group, vmin=vmin, vmax=vmax, cmap=colormap, ax=ax)
+        sns.heatmap(group, vmin=vmin, vmax=vmax, cmap=colormap, ax=ax,
+                    annot=True, annot_kws={'fontsize': 6})
         ax.set_title(kernel)
     plt.suptitle(r'Kernel importance plot ($e_\mu$)')
 
