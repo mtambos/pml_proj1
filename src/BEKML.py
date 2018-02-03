@@ -708,7 +708,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
 
         self.a_sqrd_mu = _calc_a_sqrd_mu(self.a_mu, self.a_sigma)
         self.G_sqrd_mu, self.KmtimesG_mu =\
-            _calc_G_stats(N, P, self.G_mu, self.G_sigma, Km)
+            _calc_G_stats(N, P, self.G_mu, self.G_sigma, self.Km_train_flat)
         self.b_sqrd_mu, self.e_sqrd_mu, self.etimesb_mu =\
             _calc_b_e_stats(self.b_e_mu, self.b_e_sigma, P)
         for i in range(self.max_iter):
