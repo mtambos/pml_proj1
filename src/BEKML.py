@@ -1,4 +1,5 @@
-from typing import Union, Iterable, Callable, List
+from pprint import pformat
+from typing import Union, Iterable, Callable, List  # noqa
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -8,12 +9,10 @@ from scipy.special import digamma, loggamma
 import seaborn as sns
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.decomposition import PCA
+import tensorflow as tf
 
 
 KernelType = Callable[[np.ndarray, np.ndarray], Union[float, np.ndarray]]
-
-
-LOG2PI = np.log(2 * np.pi)
 
 
 def truncnorm(a=np.infty, b=np.infty, loc=0, scale=1):
@@ -70,6 +69,18 @@ def _plot_distplot(data, name, alpha=0.3, **kwargs):
     return ax, ax2
 
 
+def create_tf_variable(np_var, name):
+    return tf.Variable(np_var, dtype=tf.float64, trainable=True, name=name)
+
+
+def create_tf_constant(np_var, name):
+    return tf.constant(np_var, dtype=tf.float64, name=name)
+
+
+LOG2PI = np.log(2 * np.pi)
+tf_LOG2PI = create_tf_constant(LOG2PI, 'tf_LOG2PI')
+
+
 # noinspection PyPep8Naming,PyMethodMayBeStatic,PyArgumentList
 class BEMKL(BaseEstimator, ClassifierMixin):
     def __init__(self, kernels: Iterable[KernelType],
@@ -80,58 +91,45 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
                  a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
                  filter_kernels: bool=True, filter_sv: bool=True,
+                 optimize_hyperparams=False, hypparam_opt_max_iter=100,
                  verbose: bool=False, init_vars: dict=None) -> None:
         """
-        :param kernels: iterable of kernels used to build the kernel matrix.
-                        A kernel is a function k(A, B, *args) that takes a
-                        np.ndarray A and a np.ndarray B as its only arguments,
-                        and returns a single float, if A and B are 1-D arrays,
-                        a 1-D array, if A or B is a 1-D array and the other is
-                        a 2-D array, or a 2-D array, if both A and B are 2-D
-                        arrays.
-        :param random_state: int, RandomState instance or None, optional,
-                             default: None
-                             If int, random_state is the seed used by the
-                             random number generator; If RandomState instance,
-                             random_state is the random number generator;
-                             If None, the random number generator is the
-                             RandomState instance used by np.random.
-        :param alpha_lambda: alpha parameter for the sample weights' prior
-                             Gamma distribution.
-        :param beta_lambda: beta parameter for the sample weights' prior Gamma
-                            distribution.
-        :param alpha_gamma: alpha parameter for the bias' prior Gamma
-                            distribution.
-        :param beta_gamma: beta parameter for the bias' prior Gamma
-                           distribution.
-        :param alpha_omega: alpha parameter for the kernel weights' prior Gamma
-                            distribution.
-        :param beta_omega: beta parameter for the kernel weights' prior Gamma
-                           distribution.
-        :param max_iter: Maximum number of iterations of the BEMKL algorithm
-                         for a single run.
-        :param margin: controls scaling ambiguity, and places a low-density
-                       region between two classes.
+        :param kernels: iterable of kernels used to build the kernel matrix. A kernel is a function k(A, B, *args)
+                        that takes a np.ndarray A and a np.ndarray B as its only arguments, and returns a single float,
+                        if A and B are 1-D arrays, a 1-D array, if A or B is a 1-D array and the other is a 2-D array,
+                        or a 2-D array, if both A and B are 2-D arrays.
+        :param random_state: default: None. If int, random_state is the seed used by the random number generator.
+                             If RandomState instance, random_state is the random number generator. If None, the random
+                             number generator is the RandomState instance used by np.random.
+        :param alpha_lambda: alpha parameter for the sample weights' prior Gamma distribution.
+        :param beta_lambda: beta parameter for the sample weights' prior Gamma distribution.
+        :param alpha_gamma: alpha parameter for the bias' prior Gamma distribution.
+        :param beta_gamma: beta parameter for the bias' prior Gamma distribution.
+        :param alpha_omega: alpha parameter for the kernel weights' prior Gamma distribution.
+        :param beta_omega: beta parameter for the kernel weights' prior Gamma distribution.
+        :param max_iter: Maximum number of iterations of the BEMKL algorithm for a single run.
+        :param margin: controls scaling ambiguity, and places a low-density region between two classes.
         :param sigma_g: standard deviation of intermediate representations.
-        :param e_null_thrsh: members of the e_μ vector with an absolute value
-                             lower than this will be considered zero.
+        :param e_null_thrsh: members of the e_μ vector with an absolute value lower than this will be considered zero.
                              Defaults to 1e-6.
-        :param a_null_thrsh: members of the a_μ vector with an absolute value
-                             lower than this will be considered zero.
+        :param a_null_thrsh: members of the a_μ vector with an absolute value lower than this will be considered zero.
                              Defaults to 1e-6.
-        :param k_norm_type: one of `none`, `pca`, `frob` or `kernel`, default
-                            `kernel`. Type of normalization to apply to the
-                            kernel matrices:
+        :param k_norm_type: one of `none`, `pca`, `frob` or `kernel`, default `kernel`. Type of normalization to apply
+                            to the kernel matrices:
                             * `none`: no normalization.
                             * `pca`: PCA whitening.
                             * `frob`: divide each matrix by its Frobenius norm.
                             * `kernel`: set
                                K~_{i, j} = K_{i, j}/ sqrt(K_{i, i}, K_{j, j}).
-        :param filter_kernels: whether to eliminate kernels with corresponding
-                               null e_μ factor.
-        :param filter_sv: whether to eliminate training points with
-                          corresponding null a_μ factor.
-        :param verbose: whether to print progress messages.
+        :param filter_kernels: whether to eliminate kernels with corresponding null e_μ factor.
+        :param filter_sv: whether to eliminate training points with corresponding null a_μ factor.
+        :param filter_sv: whether to eliminate training points with corresponding null a_μ factor.
+        :param optimize_hyperparams: whether to try to minimize the ELBO wrt. the model's hyperparameters. If True,
+                                     at each iteration in the posterior update loop, `hypparam_opt_max_iter` rounds
+                                     of hyperparameter optimization are performed.
+        :param hypparam_opt_max_iter: number of rounds of hyperparameter optimization to perform.
+        :param init_vars: dict with initial values for `a_mu`, `a_sigma`, `G_mu`, `G_sigma`, `f_mu`, and `f_sigma`.
+                          If None, these variables are randomly initialized.
 
         For gamma priors, you can experiment with three different (alpha, beta)
         values
@@ -148,6 +146,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         sigma_g=sigma_g, e_null_thrsh=e_null_thrsh,
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         filter_kernels=filter_kernels, filter_sv=filter_sv,
+                        optimize_hyperparams=optimize_hyperparams,
+                        hypparam_opt_max_iter=hypparam_opt_max_iter,
                         verbose=verbose, init_vars=init_vars)
         # Training variables
         self.X_train: np.ndarray = None
@@ -227,6 +227,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self._verbose = params['verbose']
         if 'init_vars' in params:
             self._init_vars = params['init_vars']
+        if 'optimize_hyperparams' in params:
+            self.optimize_hyperparams = params['optimize_hyperparams']
+        if 'hypparam_opt_max_iter' in params:
+            self.hypparam_opt_max_iter = params['hypparam_opt_max_iter']
         self.params.update(params)
         return self
 
@@ -484,7 +488,238 @@ class BEMKL(BaseEstimator, ClassifierMixin):
              sp_norm.pdf(beta_norm))**2 / normalization**2
         )
 
-    # noinspection PyUnresolvedReferences
+    def optimize_elbo(self):
+        with tf.device('/device:CPU:0'):
+            tf_λ_α = create_tf_variable(self.λ_α, 'tf_l_a')
+            tf_λ_β = create_tf_variable(self.λ_β, 'tf_l_b')
+            tf_γ_α = create_tf_variable(self.γ_α, 'tf_g_a')
+            tf_γ_β = create_tf_variable(self.γ_β, 'tf_g_b')
+            tf_ω_α = create_tf_variable(self.ω_α, 'tf_o_a')
+            tf_ω_β = create_tf_variable(self.ω_β, 'tf_o_b')
+            tf_sigma_g = create_tf_variable(self.σ_g, 'tf_sigma_g')
+
+            tf_N = create_tf_constant(self.N, 'tf_N')
+            tf_P = create_tf_constant(self.P, 'tf_P')
+
+            tf_lambda_alpha = create_tf_constant(self.lambda_alpha, 'tf_lambda_alpha')
+            tf_lambda_beta = create_tf_constant(self.lambda_beta, 'tf_lambda_beta')
+
+            tf_a_mu = create_tf_constant(self.a_mu, 'tf_a_mu')
+            tf_a_sigma = create_tf_constant(self.a_sigma, 'tf_a_sigma')
+            tf_a_sqrd_mu = create_tf_constant(self.a_sqrd_mu, 'tf_a_sqrd_mu')
+
+            tf_G_mu = create_tf_constant(self.G_mu, 'tf_G_mu')
+            tf_G_sigma = create_tf_constant(self.G_sigma, 'tf_G_sigma')
+            tf_G_sqrd_mu = create_tf_constant(self.G_sqrd_mu, 'tf_G_sqrd_mu')
+
+            tf_gamma_alpha = create_tf_constant(self.gamma_alpha, 'tf_gamma_alpha')
+            tf_gamma_beta = create_tf_constant(self.gamma_beta, 'tf_gamma_beta')
+
+            tf_omega_alpha = create_tf_constant(self.omega_alpha, 'tf_omega_alpha')
+            tf_omega_beta = create_tf_constant(self.omega_beta, 'tf_omega_beta')
+
+            tf_b_e_mu = create_tf_constant(self.b_e_mu, 'tf_b_e_mu')
+            tf_b_e_sigma = create_tf_constant(self.b_e_sigma, 'tf_b_e_sigma')
+            tf_b_sqrd_mu = create_tf_constant(self.b_sqrd_mu, 'tf_b_sqrd_mu')
+            tf_e_sqrd_mu = create_tf_constant(self.e_sqrd_mu, 'tf_e_sqrd_mu')
+            tf_etimesb_mu = create_tf_constant(self.etimesb_mu, 'tf_etimesb_mu')
+
+            tf_f_mu = create_tf_constant(self.f_mu, 'tf_f_mu')
+            tf_f_sigma = create_tf_constant(self.f_sigma, 'tf_f_sigma')
+
+            tf_KmKm = create_tf_constant(self.KmKm, 'tf_KmKm')
+
+            tf_KmtimesG_mu = create_tf_constant(self.KmtimesG_mu, 'tf_KmtimesG_mu')
+
+            tf_lower_bound = create_tf_constant(self.lower_bound, 'tf_lower_bound')
+            tf_upper_bound = create_tf_constant(self.upper_bound, 'tf_upper_bound')
+            tf_output = tf_b_e_mu @ tf.transpose(tf.concat((tf.ones((self.N, 1), dtype=tf.float64), tf_G_mu), axis=1))
+            tf_alpha_norm = tf_lower_bound - tf_output
+            tf_beta_norm = tf_upper_bound - tf_output
+            tf_normalization = (
+                tf.contrib.distributions.Normal(0., 1.).cdf(tf.cast(tf_beta_norm, tf.float32)) -
+                tf.contrib.distributions.Normal(0., 1.).cdf(tf.cast(tf_alpha_norm, tf.float32))
+            )
+            tf_normalization = tf.cast(
+                tf.where(tf_normalization == 0, tf.ones((1, self.N), dtype=tf.float32), tf_normalization), tf.float64
+            )
+
+            tf_lb = create_tf_variable(0, 'tf_lb')
+            # log(p(λ))
+            tf_log_p_λ = tf.reduce_sum(
+                (tf_λ_α - 1) * (tf.digamma(tf_lambda_alpha) + tf.log(tf_lambda_beta))
+                - tf_lambda_alpha * tf_lambda_beta / tf_λ_β
+                - tf.lgamma(tf_λ_α)
+                - tf_λ_α * tf.log(tf_λ_β)
+            )
+            tf_lb += tf_log_p_λ
+
+            # log(p(a | λ))
+            tf_log_p_a_λ = (
+                - 0.5 * tf.reduce_sum(tf_lambda_alpha * tf_lambda_beta * tf.matrix_diag_part(tf_a_sqrd_mu))
+                - 0.5 * tf_N * tf_LOG2PI
+                + 0.5 * tf.reduce_sum(tf.digamma(tf_lambda_alpha) + tf.log(tf_lambda_beta))
+            )
+            tf_lb += tf_log_p_a_λ
+
+            # log(p(G | a, Km))
+            tf_log_p_G_a_Km = (
+                - 0.5 * tf_sigma_g**(-2) * tf.reduce_sum(tf.matrix_diag_part(tf_G_sqrd_mu))
+                + tf_sigma_g**(-2) * tf_a_mu @ tf.transpose(tf_KmtimesG_mu)
+                - 0.5 * tf_sigma_g**-2 * tf.reduce_sum(tf_KmKm * tf_a_sqrd_mu)
+                - 0.5 * tf_N * tf_P * (tf_LOG2PI + 2 * tf.log(tf_sigma_g))
+            )[0, 0]
+            tf_lb += tf_log_p_G_a_Km
+
+            # log(p(γ))
+            tf_log_p_γ = (
+                (tf_γ_α - 1) * (tf.digamma(tf_gamma_alpha) + tf.log(tf_gamma_beta))
+                - tf_gamma_alpha * tf_gamma_beta / tf_γ_β
+                - tf.lgamma(tf_γ_α)
+                - tf_γ_α * tf.log(tf_γ_β)
+            )
+            tf_lb += tf_log_p_γ
+
+            # log(p(b | γ))
+            tf_log_p_b_γ = (
+                - 0.5 * tf_gamma_alpha * tf_gamma_beta * tf_b_sqrd_mu
+                - 0.5 * (tf_LOG2PI - (tf.digamma(tf_gamma_alpha) + tf.log(tf_gamma_beta)))
+            )
+            tf_lb += tf_log_p_b_γ
+
+            # log(p(ω))
+            tf_log_p_ω = tf.reduce_sum(
+                (tf_ω_α - 1) * (tf.digamma(tf_omega_alpha) + tf.log(tf_omega_beta))
+                - tf_omega_alpha * tf_omega_beta / tf_ω_β
+                - tf.lgamma(tf_ω_α)
+                - tf_ω_α * tf.log(tf_ω_β)
+            )
+            tf_lb += tf_log_p_ω
+
+            # log(p(e | ω))
+            tf_log_p_e_ω = (
+                - 0.5 * tf.reduce_sum(tf_omega_alpha * tf_omega_beta * tf.matrix_diag_part(tf_e_sqrd_mu))
+                - 0.5 * tf_P * tf_LOG2PI
+                + 0.5 * tf.reduce_sum(tf.digamma(tf_omega_alpha) + tf.log(tf_omega_beta))
+            )
+            tf_lb += tf_log_p_e_ω
+
+            # log(p(f | b, e, G))
+            tf_log_p_f_b_e_G = (
+                - 0.5 * (tf_f_mu @ tf.transpose(tf_f_mu) + tf.reduce_sum(tf_f_sigma))
+                + (tf.expand_dims(tf_b_e_mu[0, 1:], 0) @ tf.transpose(tf_G_mu)) @ tf.transpose(tf_f_mu)
+                + tf.reduce_sum(tf_b_e_mu[0, 0] * tf_f_mu)
+                - 0.5 * tf.reduce_sum(tf_e_sqrd_mu * tf_G_sqrd_mu)
+                - tf.reduce_sum(tf_etimesb_mu @ tf.transpose(tf_G_mu))
+                - 0.5 * tf_N * tf_b_sqrd_mu
+                - 0.5 * tf_N * tf_LOG2PI
+            )[0, 0]
+            tf_lb += tf_log_p_f_b_e_G
+
+            # log(q(λ))
+            tf_log_q_λ = tf.reduce_sum(
+                - tf_lambda_alpha
+                - tf.log(tf_lambda_beta)
+                - tf.lgamma(tf_lambda_alpha)
+                - (1 - tf_lambda_alpha) * tf.digamma(tf_lambda_alpha)
+            )
+            tf_lb -= tf_log_q_λ
+
+            # log(q(a))
+            tf_log_q_a = (
+                - 0.5 * tf_N * (tf_LOG2PI + 1)
+                - 0.5 * tf.linalg.slogdet(tf_a_sigma)[1]
+            )
+            tf_lb -= tf_log_q_a
+
+            # log(q(G))
+            tf_log_q_G = (
+                - 0.5 * tf_N * tf_P * (tf_LOG2PI + 1)
+                - 0.5 * tf_N * tf.linalg.slogdet(tf_G_sigma)[1]
+            )
+            tf_lb -= tf_log_q_G
+
+            # log(q(γ))
+            tf_log_q_γ = (
+                - tf_gamma_alpha
+                - tf.log(tf_gamma_beta)
+                - tf.lgamma(tf_gamma_alpha)
+                - (1 - tf_gamma_alpha) * tf.digamma(tf_gamma_alpha)
+            )
+            tf_lb -= tf_log_q_γ
+
+            # log(q(ω))
+            tf_log_q_ω = tf.reduce_sum(
+                - tf_omega_alpha
+                - tf.log(tf_omega_beta)
+                - tf.lgamma(tf_omega_alpha)
+                - (1 - tf_omega_alpha) * tf.digamma(tf_omega_alpha)
+            )
+            tf_lb -= tf_log_q_ω
+
+            # log(q(b, e))
+            tf_log_q_b_e = (
+                - 0.5 * (tf_P + 1) * (tf_LOG2PI + 1)
+                - 0.5 * tf.linalg.slogdet(tf_b_e_sigma)[1]
+            )
+            tf_lb -= tf_log_q_b_e
+
+            # log(q(f))
+            tf_log_q_f = tf.reduce_sum(
+                - 0.5 * (tf_LOG2PI + tf_f_sigma)
+                - tf.log(tf_normalization)
+            )
+            tf_lb -= tf_log_q_f
+
+        opt = tf.train.AdamOptimizer()
+        opt_op = opt.minimize(-tf_lb, var_list=[tf_λ_α, tf_λ_β, tf_γ_α, tf_γ_β, tf_ω_α, tf_ω_β, tf_sigma_g])
+
+        with tf.Session() as session:
+            session.run(tf.global_variables_initializer())
+
+            for i in range(self.hypparam_opt_max_iter):
+                if self.verbose and (i % self.verbose == 0 or i == self.hypparam_opt_max_iter - 1):
+                    optimal_hyperparams = {
+                        'lambda_alpha': tf_λ_α.eval(),
+                        'lambda_beta': tf_λ_β.eval(),
+                        'gamma_alpha': tf_γ_α.eval(),
+                        'gamma_beta': tf_γ_β.eval(),
+                        'omega_alpha': tf_ω_α.eval(),
+                        'omega_beta': tf_ω_β.eval(),
+                        'sigma_g': tf_sigma_g.eval(),
+                    }
+                    print(f"HyperParamIter: {i}. Bound: {tf_lb.eval()}\n"
+                          f"Hyperparams: {pformat(optimal_hyperparams)}")
+                session.run(opt_op)
+            lb = tf_lb.eval()
+            optimal_hyperparams = {
+                'lambda_alpha': tf_λ_α.eval(),
+                'lambda_beta': tf_λ_β.eval(),
+                'gamma_alpha': tf_γ_α.eval(),
+                'gamma_beta': tf_γ_β.eval(),
+                'omega_alpha': tf_ω_α.eval(),
+                'omega_beta': tf_ω_β.eval(),
+                'sigma_g': tf_sigma_g.eval(),
+            }
+            factors = {
+                'log_p_G_a_Km': tf_log_p_G_a_Km.eval(),
+                'log_p_a_λ': tf_log_p_a_λ.eval(),
+                'log_p_b_γ': tf_log_p_b_γ.eval(),
+                'log_p_e_ω': tf_log_p_e_ω.eval(),
+                'log_p_f_b_e_G': tf_log_p_f_b_e_G.eval(),
+                'log_p_γ': tf_log_p_γ.eval(),
+                'log_p_λ': tf_log_p_λ.eval(),
+                'log_p_ω': tf_log_p_ω.eval(),
+                'log_q_G': tf_log_q_G.eval(),
+                'log_q_a': tf_log_q_a.eval(),
+                'log_q_b_e': tf_log_q_b_e.eval(),
+                'log_q_f': tf_log_q_f.eval(),
+                'log_q_γ': tf_log_q_γ.eval(),
+                'log_q_λ': tf_log_q_λ.eval(),
+                'log_q_ω': tf_log_q_ω.eval(),
+            }
+        return lb, factors, optimal_hyperparams
+
     def _calc_elbo(self):
         N = self.N
         P = self.P
@@ -655,7 +890,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         lb -= log_q_f
         factors['log_q_f'] = log_q_f
 
-        return lb.real, factors
+        return lb.real, factors, {}
 
     def fit(self, X_train: np.ndarray, y_train: np.ndarray)\
             -> "BEMKL":
@@ -720,9 +955,20 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self._update_b_e()
             self._update_f()
 
-            self.bounds[i] = self._calc_elbo()
-            if self.verbose and (i % self.verbose == 0 or
-                                 i == self.max_iter - 1):
+            if self.optimize_hyperparams:
+                lb, factors, optimal_hyperparams = self.optimize_elbo()
+                self.bounds[i] = lb, optimal_hyperparams, factors
+                self._λ_α = optimal_hyperparams['lambda_alpha']
+                self._λ_β = optimal_hyperparams['lambda_beta']
+                self._γ_α = optimal_hyperparams['gamma_alpha']
+                self._γ_β = optimal_hyperparams['gamma_beta']
+                self._ω_α = optimal_hyperparams['omega_alpha']
+                self._ω_β = optimal_hyperparams['omega_beta']
+                self._σ_g = optimal_hyperparams['sigma_g']
+            else:
+                self.bounds[i] = self._calc_elbo()
+
+            if self.verbose and (i % self.verbose == 0 or i == self.max_iter - 1):
                 print(f"Iter: {i}. Bound: {self.bounds[i][0]}")
 
         self.total_kernels = P
