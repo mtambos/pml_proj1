@@ -1,5 +1,4 @@
 from typing import Union, Iterable, Callable, List
-from pprint import pformat
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -150,13 +149,40 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         filter_kernels=filter_kernels, filter_sv=filter_sv,
                         verbose=verbose, init_vars=init_vars)
+        # Training variables
         self.X_train: np.ndarray = None
+        self.Km_train: np.ndarray = None
+        self.Km_train_flat: np.ndarray = None
         self.a_mu: np.ndarray = None
         self.a_sigma: np.ndarray = None
         self.b_e_mu: np.ndarray = None
         self.b_e_sigma: np.ndarray = None
-        self.sigma_g: np.ndarray = None
+        self.G_mu: np.ndarray = None
+        self.G_sigma: np.ndarray = None
+        self.f_mu: np.ndarray = None
+        self.f_sigma: np.ndarray = None
+
         self.Km_norms: np.ndarray = None
+        self.N: int = None
+        self.P: int = None
+
+        self.lambda_alpha: float = None
+        self.lambda_beta: float = None
+        self.gamma_alpha: float = None
+        self.gamma_beta: float = None
+        self.omega_alpha: float = None
+        self.omega_beta: float = None
+        self.KmKm: np.ndarray = None
+        self.a_sqrd_mu: np.ndarray = None
+        self.G_sqrd_mu: np.ndarray = None
+        self.KmtimesG_mu: np.ndarray = None
+        self.b_sqrd_mu: np.ndarray = None
+        self.e_sqrd_mu: np.ndarray = None
+        self.etimesb_mu: np.ndarray = None
+        self.lower_bound: np.ndarray = None
+        self.upper_bound: np.ndarray = None
+        self.normalization: np.ndarray = None
+        self.bounds: List = None
 
     def get_params(self, deep=True):
         return self.params
@@ -306,45 +332,44 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                 Km[i, :, :] = kmi / np.outer(k_norm, k_norm)
         return Km, Km_norms
 
-    def _init_λ(self, N):
-        λ_α = (self.λ_α + 0.5) * np.ones(N)
-        λ_β = self.λ_β * np.ones(N)
-        return λ_α, λ_β
+    def _init_λ(self):
+        N = self.N
+        self.lambda_alpha = (self.λ_α + 0.5) * np.ones(N)
+        self.lambda_beta = self.λ_β * np.ones(N)
 
-    def _init_a(self, N):
-        a_μ = self.random_state.randn(1, N)
-        a_Σ = np.eye(N)
-        return a_μ, a_Σ
+    def _init_a(self):
+        N = self.N
+        self.a_mu = self.random_state.randn(1, N)
+        self.a_sigma = np.eye(N)
 
-    def _init_G(self, y_train, P):
-        N = len(y_train)
+    def _init_G(self, y_train):
+        P = self.P
+        N = self.N
         y_train = np.atleast_2d(np.sign(y_train)).T
-        G_μ = (np.abs(self.random_state.randn(N, P)) + self.margin) * y_train
-        G_Σ = np.eye(P)
-        return G_μ, G_Σ
+        self.G_mu = ((np.abs(self.random_state.randn(N, P)) + self.margin) *
+                     y_train)
+        self.G_sigma = np.eye(P)
 
     def _init_γ(self):
-        γ_α = (self.γ_α + 0.5)
-        γ_β = self.γ_β
-        return γ_α, γ_β
+        self.gamma_alpha = self.γ_α + 0.5
+        self.gamma_beta = self.γ_β
 
-    def _init_ω(self, P):
-        ω_α = (self.ω_α + 0.5) * np.ones(P)
-        ω_β = self.ω_β * np.ones(P)
-        return ω_α, ω_β
+    def _init_ω(self):
+        P = self.P
+        self.omega_alpha = (self.ω_α + 0.5) * np.ones(P)
+        self.omega_beta = self.ω_β * np.ones(P)
 
-    def _init_b_e(self, P):
-        b_e_μ = np.ones((1, P + 1))
-        b_e_μ[0, 0] = 0
-        b_e_Σ = np.eye(P + 1)
-        return b_e_μ, b_e_Σ
+    def _init_b_e(self):
+        P = self.P
+        self.b_e_mu = np.ones((1, P + 1))
+        self.b_e_mu[0, 0] = 0
+        self.b_e_sigma = np.eye(P + 1)
 
     def _init_f(self, y_train):
-        N = len(y_train)
-        f_μ = (abs(self.random_state.randn(N)) + self.margin)
-        f_μ *= np.sign(y_train)
-        f_σ = np.ones(N)
-        return f_μ, f_σ
+        N = self.N
+        self.f_mu = (abs(self.random_state.randn(N)) + self.margin)
+        self.f_mu *= np.sign(y_train)
+        self.f_sigma = np.ones(N)
 
     def _calc_KmKm(self, Km):
         P, N, _ = Km.shape
@@ -353,44 +378,67 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             KmKm += Km[i, :, :].T @ Km[i, :, :]
         return KmKm
 
-    def _update_λ(self, a_sqrd_mu):
-        λ_β = 1 / (1 / self.λ_β + 0.5 * np.diag(a_sqrd_mu))
-        return λ_β
+    def _update_λ(self):
+        a_sqrd_mu = self.a_sqrd_mu
+        self.lambda_beta = 1 / (1 / self.λ_β + 0.5 * np.diag(a_sqrd_mu))
 
-    def _update_a(self, lambda_alpha, lambda_beta, KmKm, sigma_g, N,
-                  KmtimesG_mu):
-        a_Σ = np.linalg.solve(
-            (np.diag(lambda_alpha * lambda_beta) + KmKm / sigma_g**2),
+    def _update_a(self):
+        N = self.N
+        sigma_g = self.σ_g
+        lambda_alpha = self.lambda_alpha
+        lambda_beta = self.lambda_beta
+        KmKm = self.KmKm
+        KmtimesG_mu = self.KmtimesG_mu
+
+        self.a_sigma = np.linalg.solve(
+            np.diag(lambda_alpha * lambda_beta) + KmKm / sigma_g**2,
             np.eye(N)
         )
-        a_μ = KmtimesG_mu @ a_Σ / sigma_g**2
-        a_sqrd_μ = _calc_a_sqrd_mu(a_μ, a_Σ)
+        self.a_mu = KmtimesG_mu @ self.a_sigma / sigma_g**2
+        self.a_sqrd_mu = _calc_a_sqrd_mu(self.a_mu, self.a_sigma)
         # a_sqrd_μ[np.abs(a_sqrd_μ) < self.a_null_thrsh] = 0
-        return a_Σ, a_μ, a_sqrd_μ
 
-    def _update_G(self, N, P, sigma_g, e_sqrd_mu, Km, a_mu, f_mu, b_e_mu,
-                  etimesb_mu):
-        G_Σ = np.linalg.solve(
+    def _update_G(self):
+        N = self.N
+        P = self.P
+        sigma_g = self.σ_g
+        e_sqrd_mu = self.e_sqrd_mu
+        Km = self.Km_train_flat
+        a_mu = self.a_mu
+        f_mu = self.f_mu
+        b_e_mu = self.b_e_mu
+        etimesb_mu = self.etimesb_mu
+
+        self.G_sigma = np.linalg.solve(
             (np.eye(P) / sigma_g**2 + e_sqrd_mu),
             np.eye(P)
         )
-        G_μ = ((a_mu @ Km.T).reshape(P, N).T / sigma_g**2 +
-               np.outer(f_mu, b_e_mu[0, 1: P + 1]) -
-               etimesb_mu) @ G_Σ
-        G_sqrd_μ, KmtimesG_μ = _calc_G_stats(N, P, G_μ, G_Σ, Km)
-        return G_Σ, G_μ, G_sqrd_μ, KmtimesG_μ
+        self.G_mu = ((a_mu @ Km.T).reshape(P, N).T / sigma_g**2 +
+                     np.outer(f_mu, b_e_mu[0, 1: P + 1]) -
+                     etimesb_mu) @ self.G_sigma
+        self.G_sqrd_mu, self.KmtimesG_mu =\
+            _calc_G_stats(N, P, self.G_mu, self.G_sigma, Km)
 
-    def _update_γ(self, b_sqrd_mu):
-        γ_β = 1 / (1 / self.γ_β + 0.5 * b_sqrd_mu)
-        return γ_β
+    def _update_γ(self):
+        b_sqrd_mu = self.b_sqrd_mu
+        self.gamma_beta = 1 / (1 / self.γ_β + 0.5 * b_sqrd_mu)
 
-    def _update_ω(self, e_sqrd_mu):
-        ω_β = 1 / (1 / self.ω_β + 0.5 * np.diag(e_sqrd_mu))
-        return ω_β
+    def _update_ω(self):
+        e_sqrd_mu = self.e_sqrd_mu
+        self.omega_beta = 1 / (1 / self.ω_β + 0.5 * np.diag(e_sqrd_mu))
 
-    def _update_b_e(self, N, P, gamma_alpha, gamma_beta, G_mu, omega_alpha,
-                    omega_beta, G_sqrd_mu, f_mu):
-        b_e_Σ = np.linalg.solve(
+    def _update_b_e(self):
+        N = self.N
+        P = self.P
+        gamma_alpha = self.gamma_alpha
+        gamma_beta = self.gamma_beta
+        G_mu = self.G_mu
+        omega_alpha = self.omega_alpha
+        omega_beta = self.omega_beta
+        G_sqrd_mu = self.G_sqrd_mu
+        f_mu = self.f_mu
+
+        self.b_e_sigma = np.linalg.solve(
             np.r_[
                 '1,2',
                 np.r_['1,2',
@@ -402,40 +450,68 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             ],
             np.eye(P + 1)
         )
-        b_e_μ = ((np.atleast_2d(f_mu) @ np.r_['1,2', np.ones((N, 1)), G_mu]) @
-                 b_e_Σ)
+        self.b_e_mu = (
+            (np.atleast_2d(f_mu) @ np.r_['1,2', np.ones((N, 1)), G_mu]) @
+            self.b_e_sigma
+        )
         # b_e_μ[0, 1:][np.abs(b_e_μ[0, 1:]) < self.e_null_thrsh] = 0
-        b_sqrd_μ, e_sqrd_μ, etimesb_μ =\
-            _calc_b_e_stats(b_e_μ, b_e_Σ, P)
-        return b_e_Σ, b_e_μ, b_sqrd_μ, e_sqrd_μ, etimesb_μ
+        self.b_sqrd_mu, self.e_sqrd_mu, self.etimesb_mu =\
+            _calc_b_e_stats(self.b_e_mu, self.b_e_sigma, P)
 
-    def _update_f(self, N, G_mu, b_e_mu, lower_bound, upper_bound):
+    def _update_f(self):
+        N = self.N
+        G_mu = self.G_mu
+        b_e_mu = self.b_e_mu
+        lower_bound = self.lower_bound
+        upper_bound = self.upper_bound
+
         output = b_e_mu @ np.r_['1,2', np.ones((N, 1)), G_mu].T
         alpha_norm = lower_bound - output
         beta_norm = upper_bound - output
         normalization = sp_norm.cdf(beta_norm) - sp_norm.cdf(alpha_norm)
         normalization[normalization == 0] = 1
-        f_μ = (
+        self.normalization = normalization
+        self.f_mu = (
             output +
             (sp_norm.pdf(alpha_norm) - sp_norm.pdf(beta_norm)) /
             normalization
         )
-        f_Σ = (
+        self.f_sigma = (
             1 +
             (alpha_norm * sp_norm.pdf(alpha_norm) -
              beta_norm * sp_norm.pdf(beta_norm)) / normalization -
             (sp_norm.pdf(alpha_norm) -
              sp_norm.pdf(beta_norm))**2 / normalization**2
         )
-        return f_μ, f_Σ, normalization
 
     # noinspection PyUnresolvedReferences
-    def _calc_elbo(self, N, P, lambda_alpha, lambda_beta, a_sqrd_mu,
-                   sigma_g, G_sqrd_mu, a_mu, KmKm, KmtimesG_mu,
-                   gamma_alpha, gamma_beta, b_sqrd_mu, omega_alpha,
-                   omega_beta, e_sqrd_mu, f_mu, f_sigma, b_e_mu, G_mu,
-                   etimesb_mu, a_sigma, G_sigma, b_e_sigma,
-                   normalization):
+    def _calc_elbo(self):
+        N = self.N
+        P = self.P
+        lambda_alpha = self.lambda_alpha
+        lambda_beta = self.lambda_beta
+        a_sqrd_mu = self.a_sqrd_mu
+        sigma_g = self._σ_g
+        G_sqrd_mu = self.G_sqrd_mu
+        a_mu = self.a_mu
+        KmKm = self.KmKm
+        KmtimesG_mu = self.KmtimesG_mu
+        gamma_alpha = self.gamma_alpha
+        gamma_beta = self.gamma_beta
+        b_sqrd_mu = self.b_sqrd_mu
+        omega_alpha = self.omega_alpha
+        omega_beta = self.omega_beta
+        e_sqrd_mu = self.e_sqrd_mu
+        f_mu = self.f_mu
+        f_sigma = self.f_sigma
+        b_e_mu = self.b_e_mu
+        G_mu = self.G_mu
+        etimesb_mu = self.etimesb_mu
+        a_sigma = self.a_sigma
+        G_sigma = self.G_sigma
+        b_e_sigma = self.b_e_sigma
+        normalization = self.normalization
+
         lb = 0
         factors = {}
         # log(p(λ))
@@ -592,94 +668,75 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         Km, Km_norms = self._create_kernel_matrix(X_train, X_train)
         self.Km_norms = Km_norms
         self.Km_train = Km
+        self.N = N
+        self.P = P
 
-        lambda_alpha, lambda_beta = self._init_λ(N)
-        gamma_alpha, gamma_beta = self._init_γ()
-        omega_alpha, omega_beta = self._init_ω(P)
-        b_e_mu, b_e_sigma = self._init_b_e(P)
-        sigma_g = self.σ_g
+        self._init_λ()
+        self._init_γ()
+        self._init_ω()
+        self._init_b_e()
         if not self.init_vars:
-            a_mu, a_sigma = self._init_a(N)
-            G_mu, G_sigma = self._init_G(y_train, P)
-            f_mu, f_sigma = self._init_f(y_train)
+            self._init_a()
+            self._init_G(y_train)
+            self._init_f(y_train)
             self._init_vars = {
-                'a_mu': a_mu,
-                'a_sigma': a_sigma,
-                'G_mu': G_mu,
-                'G_sigma': G_sigma,
-                'f_mu': f_mu,
-                'f_sigma': f_sigma,
+                'a_mu': self.a_mu,
+                'a_sigma': self.a_sigma,
+                'G_mu': self.G_mu,
+                'G_sigma': self.G_sigma,
+                'f_mu': self.f_mu,
+                'f_sigma': self.f_sigma,
             }
         else:
             init_vars = self._init_vars
-            a_mu = init_vars['a_mu']
-            a_sigma = init_vars['a_sigma']
-            G_mu = init_vars['G_mu']
-            G_sigma = init_vars['G_sigma']
-            f_mu = init_vars['f_mu']
-            f_sigma = init_vars['f_sigma']
+            self.a_mu = init_vars['a_mu']
+            self.a_sigma = init_vars['a_sigma']
+            self.G_mu = init_vars['G_mu']
+            self.G_sigma = init_vars['G_sigma']
+            self.f_mu = init_vars['f_mu']
+            self.f_sigma = init_vars['f_sigma']
 
-        KmKm = self._calc_KmKm(Km)
-        Km = Km.reshape((P * N, N))
+        self.KmKm = self._calc_KmKm(Km)
+        self.Km_train_flat = Km.reshape((P * N, N))
 
-        lower_bound = -1e40 * np.ones(N)
-        lower_bound[y_train > 0] = self.margin
-        upper_bound = 1e40 * np.ones(N)
-        upper_bound[y_train < 0] = -self.margin
+        self.lower_bound = -1e40 * np.ones(N)
+        self.lower_bound[y_train > 0] = self.margin
+        self.upper_bound = 1e40 * np.ones(N)
+        self.upper_bound[y_train < 0] = -self.margin
 
         self.bounds: List = [None] * self.max_iter
 
-        a_sqrd_mu = _calc_a_sqrd_mu(a_mu, a_sigma)
-        G_sqrd_mu, KmtimesG_mu = _calc_G_stats(N, P, G_mu, G_sigma, Km)
-        b_sqrd_mu, e_sqrd_mu, etimesb_mu =\
-            _calc_b_e_stats(b_e_mu, b_e_sigma, P)
+        self.a_sqrd_mu = _calc_a_sqrd_mu(self.a_mu, self.a_sigma)
+        self.G_sqrd_mu, self.KmtimesG_mu =\
+            _calc_G_stats(N, P, self.G_mu, self.G_sigma, Km)
+        self.b_sqrd_mu, self.e_sqrd_mu, self.etimesb_mu =\
+            _calc_b_e_stats(self.b_e_mu, self.b_e_sigma, P)
         for i in range(self.max_iter):
-            lambda_beta = self._update_λ(a_sqrd_mu)
+            self._update_λ()
+            self._update_a()
+            self._update_G()
+            self._update_γ()
+            self._update_ω()
+            self._update_b_e()
+            self._update_f()
 
-            a_sigma, a_mu, a_sqrd_mu = self._update_a(
-                lambda_alpha, lambda_beta, KmKm, sigma_g, N, KmtimesG_mu
-            )
-
-            G_sigma, G_mu, G_sqrd_mu, KmtimesG_mu = self._update_G(
-                N, P, sigma_g, e_sqrd_mu, Km, a_mu, f_mu, b_e_mu, etimesb_mu
-            )
-
-            gamma_beta = self._update_γ(b_sqrd_mu)
-
-            omega_beta = self._update_ω(e_sqrd_mu)
-
-            b_e_sigma, b_e_mu, b_sqrd_mu, e_sqrd_mu, etimesb_mu =\
-                self._update_b_e(N, P, gamma_alpha, gamma_beta, G_mu,
-                                 omega_alpha, omega_beta, G_sqrd_mu, f_mu)
-
-            f_mu, f_sigma, normalization = self._update_f(
-                N, G_mu, b_e_mu, lower_bound, upper_bound
-            )
-            self.bounds[i] = self._calc_elbo(
-                N, P, lambda_alpha, lambda_beta, a_sqrd_mu, sigma_g,
-                G_sqrd_mu, a_mu, KmKm, KmtimesG_mu, gamma_alpha, gamma_beta,
-                b_sqrd_mu, omega_alpha, omega_beta, e_sqrd_mu, f_mu, f_sigma,
-                b_e_mu, G_mu, etimesb_mu, a_sigma, G_sigma, b_e_sigma,
-                normalization
-            )
+            self.bounds[i] = self._calc_elbo()
             if self.verbose and (i % self.verbose == 0 or
                                  i == self.max_iter - 1):
                 print(f"Iter: {i}. Bound: {self.bounds[i][0]}")
-#                print(f"Iter: {i}. Bound: {self.bounds[i][0]}.\n"
-#                      f"Factors: {pformat(self.bounds[i][1])}")
-#                raise
 
         self.total_kernels = P
         self.total_sv = N
 
         self.nr_sv_used = len(np.argwhere(
-            np.abs(a_mu[0]) > self.a_null_thrsh
+            np.abs(self.a_mu[0]) > self.a_null_thrsh
         ))
         self.nr_kernels_used = len(np.argwhere(
-            np.abs(b_e_mu[0, 1:]) > self.e_null_thrsh
+            np.abs(self.b_e_mu[0, 1:]) > self.e_null_thrsh
         ))
 
-        self.e_mu_orig = e_mu = b_e_mu[0, 1:].copy()
+        self.b_e_mu_orig = b_e_mu = self.b_e_mu.copy()
+        self.b_e_sigma_orig = b_e_sigma = self.b_e_sigma.copy()
         self.kernels_orig = self.kernels.copy()
 
         if self.filter_kernels:
@@ -692,17 +749,13 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             mask = np.r_[[True], mask]
             b_e_sigma = b_e_sigma[mask][:, mask]
 
-        self.a_mu_orig = e_mu = a_mu[0].copy()
+        self.a_mu_orig = a_mu = self.a_mu.copy()
+        self.a_sigma_orig = a_sigma = self.a_sigma.copy()
         if self.filter_sv:
             mask = np.abs(a_mu[0]) > self.a_null_thrsh
             a_mu = a_mu[0, mask]
             a_sigma = a_sigma[mask][:, mask]
             self.X_train = self.X_train[mask]
-
-        self.a_mu = a_mu
-        self.a_sigma = a_sigma
-        self.b_e_mu = b_e_mu
-        self.b_e_sigma = b_e_sigma
 
         return self
 
