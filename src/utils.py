@@ -153,7 +153,7 @@ def plot_e_a_mu(model1, model2, model1_name, model2_name):
     plt.tight_layout()
 
 
-def plot_rocauc(y_test, y_score, ax=None):
+def plot_rocauc(y_test, y_score, y_score_name='y_score', ax=None):
     fpr, tpr, _ = roc_curve(y_test, y_score)
     roc_auc = auc(fpr, tpr)
 
@@ -161,7 +161,7 @@ def plot_rocauc(y_test, y_score, ax=None):
         ax = plt.figure(figsize=(8, 8)).gca()
     lw = 2
     ax.plot(fpr, tpr, color='darkorange',
-            lw=lw, label='ROC curve (area = %0.2f)' % roc_auc)
+            lw=lw, label=f'{y_score_name} - ROC curve ({roc_auc:0.2f})')
     ax.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
     ax.set_xlim([0.0, 1.0])
     ax.set_ylim([0.0, 1.05])
@@ -241,6 +241,86 @@ def plot_metrics(y_true, y_pred, y_scores, axes=None, cbar_orient='vertical'):
     plot_classification_report(y_true, y_pred, ax=ax1, cbar_orient=cbar_orient)
     plot_confusion_matrix(y_true, y_pred, ax=ax2, cbar_orient=cbar_orient)
     plot_rocauc(y_true, y_scores, ax=ax3)
+
+
+def plot_compare_metrics(y_true, y_pred1, y_pred2, y_scores1, y_scores2,
+                         y_pred1_name, y_pred2_name, axes=None, cmap=DATA_COLORS):
+    if axes is None:
+        _, axes = plt.subplots(2, 2, figsize=(16, 16))
+    ax1, ax2, ax3, ax4 = axes.flatten()
+    plot_compare_classification_report(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax1, cmap=cmap)
+    plot_compare_confusion_matrix(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax2, cmap=cmap)
+    plot_rocauc(y_true, y_scores1, y_pred1_name, ax=ax3)
+    plot_rocauc(y_true, y_scores2, y_pred2_name, ax=ax4)
+    sns.despine()
+    plt.tight_layout()
+
+
+def plot_compare_confusion_matrix(y_test, y_pred1, y_pred2,
+                                  y_pred1_name, y_pred2_name,
+                                  cmap=DATA_COLORS, ax=None):
+    conf1 = confusion_matrix(y_test, y_pred1, labels=[1, -1])
+    conf1 = conf1 / conf1.sum(axis=1, keepdims=True)
+    conf1 = conf1.flatten()
+
+    conf2 = confusion_matrix(y_test, y_pred2, labels=[1, -1])
+    conf2 = conf2 / conf2.sum(axis=1, keepdims=True)
+    conf2 = conf2.flatten()
+
+    conf_ticks = [0, 1, 2, 3]
+    conf_labels = ['TP', 'FP', 'FN', 'TN']
+    up_lim = max(*conf1, *conf2) * .03
+
+    with sns.axes_style('whitegrid'):
+        new_axis = False
+        if ax is None:
+            ax = plt.figure(figsize=(8, 4)).gca()
+            new_axis = True
+        ax.bar(conf_ticks, conf1, align='edge', width=-0.45, label=y_pred1_name, color=cmap[0])
+        ax.bar(conf_ticks, conf2, align='edge', width=0.45, label=y_pred2_name, color=cmap[1])
+        ax.set_xticks(conf_ticks)
+        ax.set_xticklabels(conf_labels)
+        ax.set_title('Confussion matrix')
+        conf1_labels = map(lambda s: f'{s:0.3f}', conf1)
+        conf2_labels = map(lambda s: f'{s:0.3f}', conf2)
+        for xi, s1, l1, s2, l2 in zip(conf_ticks, conf1, conf1_labels, conf2, conf2_labels):
+            ax.text(xi - len(l1) * .065, s1 + up_lim, l1, bbox=dict(facecolor='w', edgecolor='w', alpha=.5), size=10)
+            ax.text(xi + len(l2) * .02, s2 + up_lim, l2, bbox=dict(facecolor='w', edgecolor='w', alpha=.5), size=10)
+        ax.legend(loc='center')
+        if new_axis:
+            sns.despine()
+            plt.tight_layout()
+
+
+def plot_compare_classification_report(y_test, y_pred1, y_pred2,
+                                       y_pred1_name, y_pred2_name,
+                                       ax=None, cmap=DATA_COLORS):
+    prf11 = precision_recall_fscore_support(y_test, y_pred1, average='binary')[:-1]
+    prf12 = precision_recall_fscore_support(y_test, y_pred2, average='binary')[:-1]
+    prf1_ticks = [0, 1, 2]
+    prf1_labels = ['P', 'R', 'F1']
+    up_lim = max(*prf11, *prf12) * .03
+
+    with sns.axes_style('whitegrid'):
+        new_axis = False
+        if ax is None:
+            ax = plt.figure(figsize=(8, 4)).gca()
+            new_axis = True
+        ax.bar(prf1_ticks, prf11, align='edge', width=-0.45, label=y_pred1_name)
+        ax.bar(prf1_ticks, prf12, align='edge', width=0.45, label=y_pred2_name)
+        ax.set_xlim(-0.5, 3.1)
+        ax.set_xticks(prf1_ticks)
+        ax.set_xticklabels(prf1_labels)
+        ax.set_title('Classification report')
+        prf11_labels = map(lambda s: f'{s:0.3f}', prf11)
+        prf12_labels = map(lambda s: f'{s:0.3f}', prf12)
+        for xi, s1, l1, s2, l2 in zip(prf1_ticks, prf11, prf11_labels, prf12, prf12_labels):
+            ax.text(xi - len(l1) * .05, s1 + up_lim, l1, bbox=dict(facecolor='w', edgecolor='w', alpha=.5), size=10)
+            ax.text(xi + len(l2) * .0125, s2 + up_lim, l2, bbox=dict(facecolor='w', edgecolor='w', alpha=.5), size=10)
+        ax.legend()
+        if new_axis:
+            sns.despine()
+            plt.tight_layout()
 
 
 def evaluate_model(model, X, y, kernel_attrs, cmap=HEATMAP_CMAP):
