@@ -1,4 +1,5 @@
 from pprint import pformat
+from time import time
 from typing import Union, Iterable, Callable, List  # noqa
 
 from matplotlib import pyplot as plt
@@ -48,7 +49,7 @@ def _calc_b_e_stats(b_e_mu, b_e_sigma, P):
     return b_sqrd_μ, e_sqrd_μ, etimesb_μ
 
 
-def _plot_distplot(data, name, alpha=0.3, **kwargs):
+def plot_distplot(data, name, alpha=0.3, **kwargs):
     if 'ax' in kwargs:
         ax = kwargs['ax']
         del kwargs['ax']
@@ -88,10 +89,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                  alpha_lambda: float=1, beta_lambda: float=1,
                  alpha_gamma: float=1, beta_gamma: float=1,
                  alpha_omega: float=1, beta_omega: float=1, max_iter: int=200,
-                 margin: float=1, sigma_g: float=0.1, e_null_thrsh: float=1e-6,
-                 a_null_thrsh: float=1e-6, k_norm_type: str='kernel',
+                 margin: float=1, sigma_g: float=0.1,
+                 e_null_thrsh: float=1e-6, a_null_thrsh: float=1e-6,
+                 k_norm_type: str='kernel',
                  filter_kernels: bool=True, filter_sv: bool=True,
-                 optimize_hyperparams=False, hypparam_opt_max_iter=100,
+                 hyperopt_enabled: bool=False, hyperopt_max_iter: int=100, hyperopt_every: int=5,
+                 hyperopt_tol: float=1,
                  verbose: bool=False, init_vars: dict=None) -> None:
         """
         :param kernels: iterable of kernels used to build the kernel matrix. A kernel is a function k(A, B, *args)
@@ -124,10 +127,12 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         :param filter_kernels: whether to eliminate kernels with corresponding null e_μ factor.
         :param filter_sv: whether to eliminate training points with corresponding null a_μ factor.
         :param filter_sv: whether to eliminate training points with corresponding null a_μ factor.
-        :param optimize_hyperparams: whether to try to minimize the ELBO wrt. the model's hyperparameters. If True,
-                                     at each iteration in the posterior update loop, `hypparam_opt_max_iter` rounds
+        :param hyperopt_enabled: whether to try to minimize the ELBO wrt. the model's hyperparameters. If True,
+                                     at each iteration in the posterior update loop, `hyperopt_max_iter` rounds
                                      of hyperparameter optimization are performed.
-        :param hypparam_opt_max_iter: number of rounds of hyperparameter optimization to perform.
+        :param hyperopt_max_iter: number of rounds of hyperparameter optimization to perform.
+        :param hyperopt_every: if `hyperopt_enabled` is True, run hyper parameter optimization every
+                                   `hyperopt_every` steps of the fit loop.
         :param init_vars: dict with initial values for `a_mu`, `a_sigma`, `G_mu`, `G_sigma`, `f_mu`, and `f_sigma`.
                           If None, these variables are randomly initialized.
 
@@ -137,6 +142,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         (1e-10, 1e+10) => good for obtaining sparsity
         (1e-10, 1e-10) => good for small sample size problems
         """
+        self.total_time: float = None
         self.params: dict = {}
         self.set_params(kernels=kernels, random_state=random_state,
                         alpha_lambda=alpha_lambda, beta_lambda=beta_lambda,
@@ -146,8 +152,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         sigma_g=sigma_g, e_null_thrsh=e_null_thrsh,
                         a_null_thrsh=a_null_thrsh, k_norm_type=k_norm_type,
                         filter_kernels=filter_kernels, filter_sv=filter_sv,
-                        optimize_hyperparams=optimize_hyperparams,
-                        hypparam_opt_max_iter=hypparam_opt_max_iter,
+                        hyperopt_enabled=hyperopt_enabled,
+                        hyperopt_max_iter=hyperopt_max_iter,
+                        hyperopt_every=hyperopt_every,
+                        hyperopt_tol=hyperopt_tol,
                         verbose=verbose, init_vars=init_vars)
         # Training variables
         self.X_train: np.ndarray = None
@@ -227,10 +235,15 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self._verbose = params['verbose']
         if 'init_vars' in params:
             self._init_vars = params['init_vars']
-        if 'optimize_hyperparams' in params:
-            self.optimize_hyperparams = params['optimize_hyperparams']
-        if 'hypparam_opt_max_iter' in params:
-            self.hypparam_opt_max_iter = params['hypparam_opt_max_iter']
+        if 'hyperopt_enabled' in params:
+            self.hyperopt_enabled = params['hyperopt_enabled']
+        if 'hyperopt_max_iter' in params:
+            self.hyperopt_max_iter = params['hyperopt_max_iter']
+        if 'hyperopt_every' in params:
+            self.hyperopt_every = params['hyperopt_every']
+        if 'hyperopt_tol' in params:
+            self.hyperopt_tol = params['hyperopt_tol']
+
         self.params.update(params)
         return self
 
@@ -677,8 +690,8 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         with tf.Session() as session:
             session.run(tf.global_variables_initializer())
 
-            for i in range(self.hypparam_opt_max_iter):
-                if self.verbose and (i % self.verbose == 0 or i == self.hypparam_opt_max_iter - 1):
+            for i in range(self.hyperopt_max_iter):
+                if self.verbose and ((i + 1) % self.verbose == 0):
                     optimal_hyperparams = {
                         'lambda_alpha': tf_λ_α.eval(),
                         'lambda_beta': tf_λ_β.eval(),
@@ -688,7 +701,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
                         'omega_beta': tf_ω_β.eval(),
                         'sigma_g': tf_sigma_g.eval(),
                     }
-                    print(f"HyperParamIter: {i}. Bound: {tf_lb.eval()}\n"
+                    print(f"HyperParamIter: {i + 1}. Bound: {tf_lb.eval()}\n"
                           f"Hyperparams: {pformat(optimal_hyperparams)}")
                 session.run(opt_op)
             lb = tf_lb.eval()
@@ -892,8 +905,7 @@ class BEMKL(BaseEstimator, ClassifierMixin):
 
         return lb.real, factors, {}
 
-    def fit(self, X_train: np.ndarray, y_train: np.ndarray)\
-            -> "BEMKL":
+    def fit(self, X_train: np.ndarray, y_train: np.ndarray) -> "BEMKL":
         X_train = np.asarray(X_train)
         y_train = np.asarray(y_train).flatten()
         self.X_train = X_train
@@ -946,6 +958,9 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             _calc_G_stats(N, P, self.G_mu, self.G_sigma, self.Km_train_flat)
         self.b_sqrd_mu, self.e_sqrd_mu, self.etimesb_mu =\
             _calc_b_e_stats(self.b_e_mu, self.b_e_sigma, P)
+
+        self.total_time = 0
+        init_time = time()
         for i in range(self.max_iter):
             self._update_λ()
             self._update_a()
@@ -955,21 +970,32 @@ class BEMKL(BaseEstimator, ClassifierMixin):
             self._update_b_e()
             self._update_f()
 
-            if self.optimize_hyperparams:
+            if self.hyperopt_enabled and i > 0 and i % self.hyperopt_every == 0:
+                prev_lb, *_ = self._calc_elbo()
                 lb, factors, optimal_hyperparams = self.optimize_elbo()
+                try:
+                    assert lb >= prev_lb or prev_lb - lb < self.hyperopt_tol
+                except AssertionError:
+                    print(lb, prev_lb)
+                    raise
                 self.bounds[i] = lb, optimal_hyperparams, factors
-                self._λ_α = optimal_hyperparams['lambda_alpha']
-                self._λ_β = optimal_hyperparams['lambda_beta']
-                self._γ_α = optimal_hyperparams['gamma_alpha']
-                self._γ_β = optimal_hyperparams['gamma_beta']
-                self._ω_α = optimal_hyperparams['omega_alpha']
-                self._ω_β = optimal_hyperparams['omega_beta']
-                self._σ_g = optimal_hyperparams['sigma_g']
+                self.set_params(alpha_lambda=optimal_hyperparams['lambda_alpha'],
+                                beta_lambda=optimal_hyperparams['lambda_beta'],
+                                alpha_gamma=optimal_hyperparams['gamma_alpha'],
+                                beta_gamma=optimal_hyperparams['gamma_beta'],
+                                alpha_omega=optimal_hyperparams['omega_alpha'],
+                                beta_omega=optimal_hyperparams['omega_beta'],
+                                sigma_g=optimal_hyperparams['sigma_g'])
             else:
                 self.bounds[i] = self._calc_elbo()
 
-            if self.verbose and (i % self.verbose == 0 or i == self.max_iter - 1):
-                print(f"Iter: {i}. Bound: {self.bounds[i][0]}")
+            if self.verbose and ((i + 1) % self.verbose == 0):
+                last_bound = self.bounds[i][0]
+                print(f"Iter: {i + 1}. Bound: {last_bound:.4f}")
+
+        self.total_time = time() - init_time
+        if self.verbose:
+            print(f"Iterations total time: {self.total_time:.4f}")
 
         self.total_kernels = P
         self.total_sv = N
@@ -1048,10 +1074,10 @@ class BEMKL(BaseEstimator, ClassifierMixin):
         return np.r_['0,2', 1-y_pred_proba, y_pred_proba].T
 
     def plot_e(self, **kwargs):
-        return _plot_distplot(self.e_mu_orig, r'$e_\mu$', **kwargs)
+        return plot_distplot(self.b_e_mu_orig[0, 1:], r'$e_\mu$', **kwargs)
 
     def plot_a(self, **kwargs):
-        return _plot_distplot(self.a_mu_orig, r'$a_\mu$', **kwargs)
+        return plot_distplot(self.a_mu_orig[0], r'$a_\mu$', **kwargs)
 
     def plot_bounds(self, **kwargs):
         if 'ax' in kwargs:
