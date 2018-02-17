@@ -260,7 +260,7 @@ def plot_compare_metrics(y_true, y_pred1, y_pred2, y_scores1, y_scores2,
     ax1, ax2, ax3, ax4 = axes.flatten()
     fig1 = ax1.figure
     fig2 = ax3.figure
-    
+
     plot_compare_classification_report(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax1, cmap=cmap)
     plot_compare_confusion_matrix(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax2, cmap=cmap)
     sns.despine(fig=fig1)
@@ -403,20 +403,17 @@ def plot_compare_models(y_true, y_pred1, y_pred2, y_scores1, y_scores2,
     if axes is None:
         _, axes1 = plt.subplots(1, 2, figsize=(16, 8))
         _, axes2 = plt.subplots(1, 2, figsize=(16, 8))
-        _, axes3 = plt.subplots(1, 2, figsize=(16, 8))
-        axes = np.array([*axes1, *axes2, *axes3, *axes4])
-    ax1, ax2, ax3, ax4, ax5, ax6 = axes.flatten()
+        axes = np.array([*axes1, *axes2])
+    ax1, ax2, ax3, ax4 = axes.flatten()
     fig1 = ax1.figure
     fig2 = ax3.figure
-    fig3 = ax5.figure
 
     plot_compare_classification_report(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax1, cmap=cmap)
     plot_compare_confusion_matrix(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax2, cmap=cmap)
     sns.despine(fig=fig1)
-    ax1.figure.tight_layout()
+    fig1.tight_layout()
 
     plot_rocauc(y_true, y_scores1, y_pred1_name, ax=ax3)
     plot_rocauc(y_true, y_scores2, y_pred2_name, ax=ax4)
     sns.despine(fig=fig2)
-    ax3.figure.tight_layout()
-
+    fig2.tight_layout()
