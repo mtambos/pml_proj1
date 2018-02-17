@@ -51,6 +51,7 @@ def gauss_kernel(A, B, sigma):
 def scoring(estimator, X_test, y_test):
     if 'iteration' not in dir(scoring):
         scoring.iteration = 0
+        scoring.stats = []
     y_pred = estimator.predict(X_test)
     score = accuracy_score(y_test, y_pred)
     bemkl_model = estimator
@@ -69,7 +70,14 @@ def scoring(estimator, X_test, y_test):
             f"Mean e: {e_mu.mean():0.4f}. "
             f"Median e: {np.median(e_mu):0.4f}. "
             f"Std e: {e_mu.std():0.4f}. "
-         )
+        )
+        scoring.stats.append({
+            'nr_kernels_used': bemkl_model.nr_kernels_used,
+            'total_kernels': bemkl_model.total_kernels,
+            'nr_sv_used': bemkl_model.nr_sv_used,
+            'total_sv': bemkl_model.total_sv,
+            'elapsed_time': bemkl_model.total_time,
+        })
         scoring.iteration += 1
     return score
 
@@ -246,14 +254,22 @@ def plot_metrics(y_true, y_pred, y_scores, axes=None, cbar_orient='vertical'):
 def plot_compare_metrics(y_true, y_pred1, y_pred2, y_scores1, y_scores2,
                          y_pred1_name, y_pred2_name, axes=None, cmap=DATA_COLORS):
     if axes is None:
-        _, axes = plt.subplots(2, 2, figsize=(16, 16))
+        _, axes1 = plt.subplots(1, 2, figsize=(16, 8))
+        _, axes2 = plt.subplots(1, 2, figsize=(16, 8))
+        axes = np.array([*axes1, *axes2])
     ax1, ax2, ax3, ax4 = axes.flatten()
+    fig1 = ax1.figure
+    fig2 = ax3.figure
+    
     plot_compare_classification_report(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax1, cmap=cmap)
     plot_compare_confusion_matrix(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax2, cmap=cmap)
+    sns.despine(fig=fig1)
+    ax1.figure.tight_layout()
+
     plot_rocauc(y_true, y_scores1, y_pred1_name, ax=ax3)
     plot_rocauc(y_true, y_scores2, y_pred2_name, ax=ax4)
-    sns.despine()
-    plt.tight_layout()
+    sns.despine(fig=fig2)
+    ax3.figure.tight_layout()
 
 
 def plot_compare_confusion_matrix(y_test, y_pred1, y_pred2,
@@ -380,3 +396,27 @@ def evaluate_model(model, X, y, kernel_attrs, cmap=HEATMAP_CMAP):
     scoring.iteration = 0
     folds = RepeatedStratifiedKFold(n_splits=3, n_repeats=2)
     return cross_validate(model_cv, X, y, cv=folds, scoring=scoring)
+
+
+def plot_compare_models(y_true, y_pred1, y_pred2, y_scores1, y_scores2,
+                        y_pred1_name, y_pred2_name, axes=None, cmap=DATA_COLORS):
+    if axes is None:
+        _, axes1 = plt.subplots(1, 2, figsize=(16, 8))
+        _, axes2 = plt.subplots(1, 2, figsize=(16, 8))
+        _, axes3 = plt.subplots(1, 2, figsize=(16, 8))
+        axes = np.array([*axes1, *axes2, *axes3, *axes4])
+    ax1, ax2, ax3, ax4, ax5, ax6 = axes.flatten()
+    fig1 = ax1.figure
+    fig2 = ax3.figure
+    fig3 = ax5.figure
+
+    plot_compare_classification_report(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax1, cmap=cmap)
+    plot_compare_confusion_matrix(y_true, y_pred1, y_pred2, y_pred1_name, y_pred2_name, ax=ax2, cmap=cmap)
+    sns.despine(fig=fig1)
+    ax1.figure.tight_layout()
+
+    plot_rocauc(y_true, y_scores1, y_pred1_name, ax=ax3)
+    plot_rocauc(y_true, y_scores2, y_pred2_name, ax=ax4)
+    sns.despine(fig=fig2)
+    ax3.figure.tight_layout()
+
